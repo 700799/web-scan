@@ -1,0 +1,824 @@
+/* ===========================================================
+ * SERPSCOPE — Core SEO Analyzer
+ * Fully client-side. Fetches public pages via CORS proxy,
+ * extracts ~120 signals, normalizes them 0–100, and scores
+ * across On-Page / Technical / Content / Off-Page categories.
+ * =========================================================== */
+
+(function (global) {
+  'use strict';
+
+  // ── CORS proxies ────────────────────────────────────────────
+  const PROXIES = {
+    allorigins: {
+      build: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+      headers: {},
+    },
+    corsproxy: {
+      build: (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+      headers: {},
+    },
+    codetabs: {
+      build: (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
+      headers: {},
+    },
+  };
+
+  // ── Scoring weights ─────────────────────────────────────────
+  const WEIGHTS = { onpage: 0.30, technical: 0.30, content: 0.25, offpage: 0.15 };
+
+  // ── Helpers ─────────────────────────────────────────────────
+  function normalizeUrl(input) {
+    if (!input) return null;
+    let u = input.trim();
+    if (!u) return null;
+    if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+    try { return new URL(u).href; } catch { return null; }
+  }
+
+  function domainOf(u) {
+    try { return new URL(u).hostname.replace(/^www\./i, ''); } catch { return u; }
+  }
+
+  function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+  function pct(n) { return Math.round(clamp(n, 0, 100)); }
+
+  async function fetchWithTimeout(url, opts = {}, ms = 25000) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const r = await fetch(url, { ...opts, signal: ctrl.signal });
+      clearTimeout(t);
+      return r;
+    } catch (e) { clearTimeout(t); throw e; }
+  }
+
+  async function fetchPage(url, proxyKey = 'allorigins') {
+    const proxy = PROXIES[proxyKey] || PROXIES.allorigins;
+    const proxied = proxy.build(url);
+    const started = performance.now();
+    const r = await fetchWithTimeout(proxied, { headers: proxy.headers }, 25000);
+    const elapsed = performance.now() - started;
+    if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${url}`);
+    const html = await r.text();
+    return { html, ms: elapsed, finalUrl: url, status: r.status };
+  }
+
+  async function probeHead(url, proxyKey = 'allorigins') {
+    // Probe a path via the proxy. Returns { ok, status, size? }
+    try {
+      const proxy = PROXIES[proxyKey] || PROXIES.allorigins;
+      const r = await fetchWithTimeout(proxy.build(url), {}, 10000);
+      const text = r.ok ? await r.text() : '';
+      return { ok: r.ok, status: r.status, size: text.length, text };
+    } catch { return { ok: false, status: 0 }; }
+  }
+
+  // ── HTML parsing ────────────────────────────────────────────
+  function parseHtml(html) {
+    const parser = new DOMParser();
+    return parser.parseFromString(html, 'text/html');
+  }
+
+  function textContentOf(el) {
+    return (el?.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function attr(el, name) { return el?.getAttribute?.(name) || ''; }
+
+  function fleschReadingEase(text) {
+    const words = text.split(/\s+/).filter(Boolean);
+    const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 0);
+    if (!words.length || !sentences.length) return 0;
+    const syl = words.reduce((sum, w) => sum + countSyllables(w), 0);
+    return 206.835 - 1.015 * (words.length / sentences.length) - 84.6 * (syl / words.length);
+  }
+
+  function countSyllables(word) {
+    word = word.toLowerCase().replace(/[^a-z]/g, '');
+    if (word.length <= 3) return 1;
+    word = word.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '');
+    word = word.replace(/^y/, '');
+    const m = word.match(/[aeiouy]{1,2}/g);
+    return m ? m.length : 1;
+  }
+
+  // ── Signal extraction ───────────────────────────────────────
+  function extractSignals(html, url, fetchMs) {
+    const doc = parseHtml(html);
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, '');
+    const isHttps = u.protocol === 'https:';
+
+    // Title
+    const titleEl = doc.querySelector('title');
+    const title = textContentOf(titleEl);
+    const titleLen = title.length;
+
+    // Meta description
+    const metaDesc = attr(doc.querySelector('meta[name="description" i]'), 'content').trim();
+    const descLen = metaDesc.length;
+
+    // Meta robots & canonical
+    const robots = attr(doc.querySelector('meta[name="robots" i]'), 'content').toLowerCase();
+    const canonical = attr(doc.querySelector('link[rel="canonical" i]'), 'href');
+    const viewport = attr(doc.querySelector('meta[name="viewport" i]'), 'content');
+    const charset = doc.characterSet || doc.charset || '';
+    const lang = doc.documentElement.getAttribute('lang') || '';
+
+    // Headings
+    const headings = { h1: [], h2: [], h3: [], h4: [], h5: [], h6: [] };
+    Object.keys(headings).forEach((tag) => {
+      doc.querySelectorAll(tag).forEach((h) => headings[tag].push(textContentOf(h)));
+    });
+
+    // Links
+    const links = Array.from(doc.querySelectorAll('a[href]'));
+    const internal = [], external = [], nofollow = [];
+    links.forEach((a) => {
+      const href = a.getAttribute('href');
+      if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+      try {
+        const abs = new URL(href, url);
+        if (abs.hostname.replace(/^www\./, '') === host) internal.push(abs.href);
+        else external.push(abs.href);
+        const rel = (a.getAttribute('rel') || '').toLowerCase();
+        if (rel.includes('nofollow')) nofollow.push(abs.href);
+      } catch {}
+    });
+
+    // Images
+    const imgs = Array.from(doc.querySelectorAll('img'));
+    const imgsWithAlt = imgs.filter((i) => attr(i, 'alt').trim().length > 0);
+    const imgsWithEmptyAlt = imgs.filter((i) => i.hasAttribute('alt') && !attr(i, 'alt').trim());
+    const imgsLazy = imgs.filter((i) => attr(i, 'loading').toLowerCase() === 'lazy');
+    const imgsModern = imgs.filter((i) => /\.(webp|avif)(\?|$)/i.test(attr(i, 'src')));
+
+    // Body text & word count
+    const bodyClone = doc.body ? doc.body.cloneNode(true) : null;
+    if (bodyClone) {
+      bodyClone.querySelectorAll('script, style, noscript, nav, footer, header').forEach((n) => n.remove());
+    }
+    const bodyText = bodyClone ? textContentOf(bodyClone) : '';
+    const words = bodyText ? bodyText.split(/\s+/).filter(Boolean) : [];
+    const wordCount = words.length;
+    const sentenceCount = bodyText ? bodyText.split(/[.!?]+/).filter((s) => s.trim()).length : 0;
+    const flesch = bodyText ? fleschReadingEase(bodyText) : 0;
+
+    // Open Graph & Twitter Cards
+    const og = {};
+    doc.querySelectorAll('meta[property^="og:" i]').forEach((m) => {
+      og[attr(m, 'property').toLowerCase()] = attr(m, 'content');
+    });
+    const twitter = {};
+    doc.querySelectorAll('meta[name^="twitter:" i]').forEach((m) => {
+      twitter[attr(m, 'name').toLowerCase()] = attr(m, 'content');
+    });
+
+    // Structured data
+    const ldjson = [];
+    doc.querySelectorAll('script[type="application/ld+json"]').forEach((s) => {
+      try { ldjson.push(JSON.parse(s.textContent)); } catch {}
+    });
+    const microdata = doc.querySelectorAll('[itemscope]').length;
+    const rdfa = doc.querySelectorAll('[typeof], [property]:not([property^="og:" i]):not([property^="article:" i])').length;
+    const schemaTypes = [];
+    ldjson.forEach((j) => {
+      const collect = (n) => {
+        if (!n) return;
+        if (Array.isArray(n)) return n.forEach(collect);
+        if (n['@type']) {
+          (Array.isArray(n['@type']) ? n['@type'] : [n['@type']]).forEach((t) => schemaTypes.push(t));
+        }
+        if (n['@graph']) collect(n['@graph']);
+      };
+      collect(j);
+    });
+
+    // hreflang
+    const hreflang = Array.from(doc.querySelectorAll('link[rel="alternate" i][hreflang]')).map((l) => attr(l, 'hreflang'));
+
+    // Performance hints
+    const totalScripts = doc.querySelectorAll('script').length;
+    const inlineStyles = doc.querySelectorAll('style').length;
+    const stylesheets = doc.querySelectorAll('link[rel="stylesheet"]').length;
+    const htmlSize = html.length;
+
+    // Forms
+    const forms = doc.querySelectorAll('form').length;
+
+    // Favicon
+    const favicon = doc.querySelector('link[rel*="icon" i]');
+
+    // Social presence — extract from external links
+    const socialDomains = ['facebook.com', 'twitter.com', 'x.com', 'instagram.com', 'linkedin.com', 'youtube.com', 'tiktok.com', 'pinterest.com', 'github.com'];
+    const socialFound = new Set();
+    external.forEach((href) => {
+      try {
+        const h = new URL(href).hostname.replace(/^www\./, '');
+        socialDomains.forEach((s) => { if (h.endsWith(s)) socialFound.add(s); });
+      } catch {}
+    });
+
+    // Keyword density (top 10 word stems excluding stopwords)
+    const STOP = new Set(['the','a','an','of','to','and','or','in','on','for','is','are','was','were','be','by','with','as','at','from','this','that','it','its','i','you','we','our','your','their','they','he','she','his','her','can','will','would','should','could','may','might','do','does','did','have','has','had','but','not','no','if','so','than','then','about','into','out','up','down','over','under','more','most','some','any','all','one','two','also','just','only','my','me','us','them','what','which','who','whose','how','when','where','why']);
+    const freq = {};
+    words.forEach((w) => {
+      const k = w.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (!k || k.length < 3 || STOP.has(k)) return;
+      freq[k] = (freq[k] || 0) + 1;
+    });
+    const topKeywords = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 15);
+
+    // Mixed content
+    let mixedContent = 0;
+    if (isHttps) {
+      doc.querySelectorAll('img[src^="http:" i], script[src^="http:" i], link[href^="http:" i]').forEach(() => mixedContent++);
+    }
+
+    return {
+      url, host, isHttps,
+      fetchMs,
+      title, titleLen,
+      metaDesc, descLen,
+      robots, canonical, viewport, charset, lang,
+      headings,
+      links: { internal: internal.length, external: external.length, nofollow: nofollow.length, total: internal.length + external.length },
+      images: { total: imgs.length, withAlt: imgsWithAlt.length, emptyAlt: imgsWithEmptyAlt.length, lazy: imgsLazy.length, modern: imgsModern.length },
+      bodyText: bodyText.slice(0, 1500),
+      wordCount, sentenceCount, flesch,
+      og, twitter,
+      ldjson: ldjson.length, schemaTypes,
+      microdata, rdfa,
+      hreflang,
+      htmlSize, totalScripts, inlineStyles, stylesheets,
+      forms,
+      hasFavicon: !!favicon,
+      socials: Array.from(socialFound),
+      mixedContent,
+      topKeywords,
+    };
+  }
+
+  // ── Scoring (each function returns { score: 0-100, details: [...] }) ──
+
+  function scoreOnPage(s) {
+    const details = [];
+    let total = 0, max = 0;
+    const add = (n, m, label, pass) => { total += n; max += m; details.push({ label, score: n, max: m, status: pass }); };
+
+    // Title (15)
+    if (!s.title) add(0, 15, 'Title tag', 'fail');
+    else if (s.titleLen < 30) add(7, 15, `Title too short (${s.titleLen})`, 'warn');
+    else if (s.titleLen > 65) add(8, 15, `Title too long (${s.titleLen})`, 'warn');
+    else add(15, 15, `Title length optimal (${s.titleLen})`, 'pass');
+
+    // Meta description (12)
+    if (!s.metaDesc) add(0, 12, 'Meta description missing', 'fail');
+    else if (s.descLen < 70) add(5, 12, `Meta desc short (${s.descLen})`, 'warn');
+    else if (s.descLen > 160) add(7, 12, `Meta desc long (${s.descLen})`, 'warn');
+    else add(12, 12, `Meta desc optimal (${s.descLen})`, 'pass');
+
+    // H1 (12)
+    const h1n = s.headings.h1.length;
+    if (h1n === 0) add(0, 12, 'No H1 tag', 'fail');
+    else if (h1n > 1) add(6, 12, `Multiple H1 tags (${h1n})`, 'warn');
+    else add(12, 12, 'Single H1 present', 'pass');
+
+    // Heading hierarchy (8)
+    const totalH = s.headings.h2.length + s.headings.h3.length + s.headings.h4.length;
+    if (totalH >= 5) add(8, 8, `${totalH} sub-headings`, 'pass');
+    else if (totalH >= 2) add(5, 8, `${totalH} sub-headings (sparse)`, 'warn');
+    else add(2, 8, 'Heading hierarchy weak', 'fail');
+
+    // Image alt coverage (10)
+    const imgs = s.images;
+    const altCov = imgs.total ? imgs.withAlt / imgs.total : 1;
+    if (imgs.total === 0) add(8, 10, 'No images on page', 'info');
+    else if (altCov >= 0.9) add(10, 10, `Alt coverage ${Math.round(altCov*100)}%`, 'pass');
+    else if (altCov >= 0.6) add(6, 10, `Alt coverage ${Math.round(altCov*100)}%`, 'warn');
+    else add(2, 10, `Alt coverage only ${Math.round(altCov*100)}%`, 'fail');
+
+    // Canonical (6)
+    if (s.canonical) add(6, 6, 'Canonical tag present', 'pass');
+    else add(0, 6, 'Missing canonical tag', 'warn');
+
+    // Open Graph (8)
+    const ogCount = ['og:title', 'og:description', 'og:image', 'og:type'].filter((k) => s.og[k]).length;
+    if (ogCount === 4) add(8, 8, 'Open Graph complete', 'pass');
+    else if (ogCount >= 2) add(4, 8, `Open Graph partial (${ogCount}/4)`, 'warn');
+    else add(0, 8, 'Open Graph missing', 'fail');
+
+    // Twitter Cards (5)
+    if (s.twitter['twitter:card']) add(5, 5, 'Twitter Card present', 'pass');
+    else add(0, 5, 'Twitter Card missing', 'warn');
+
+    // Internal links (8)
+    if (s.links.internal >= 10) add(8, 8, `${s.links.internal} internal links`, 'pass');
+    else if (s.links.internal >= 3) add(4, 8, `Only ${s.links.internal} internal links`, 'warn');
+    else add(1, 8, `Very few internal links (${s.links.internal})`, 'fail');
+
+    // External link health (4)
+    if (s.links.external === 0) add(2, 4, 'No external citations', 'warn');
+    else if (s.links.external <= 20) add(4, 4, `${s.links.external} outbound`, 'pass');
+    else add(2, 4, `${s.links.external} outbound (heavy)`, 'warn');
+
+    // Language declared (4)
+    if (s.lang) add(4, 4, `Language set: ${s.lang}`, 'pass');
+    else add(0, 4, 'No lang attribute on <html>', 'warn');
+
+    // Favicon (4)
+    if (s.hasFavicon) add(4, 4, 'Favicon present', 'pass');
+    else add(0, 4, 'Missing favicon', 'warn');
+
+    // Schema markup (4)
+    if (s.ldjson > 0) add(4, 4, `${s.ldjson} JSON-LD blocks (${s.schemaTypes.slice(0,3).join(', ') || 'untyped'})`, 'pass');
+    else if (s.microdata > 0) add(2, 4, `${s.microdata} microdata items`, 'warn');
+    else add(0, 4, 'No structured data', 'warn');
+
+    return { score: pct((total / max) * 100), details, raw: total, max };
+  }
+
+  function scoreTechnical(s, perf) {
+    const details = [];
+    let total = 0, max = 0;
+    const add = (n, m, label, pass) => { total += n; max += m; details.push({ label, score: n, max: m, status: pass }); };
+
+    // HTTPS (15)
+    if (s.isHttps) add(15, 15, 'HTTPS enabled', 'pass'); else add(0, 15, 'No HTTPS', 'fail');
+
+    // Mobile viewport (12)
+    if (/width=device-width/i.test(s.viewport)) add(12, 12, 'Mobile viewport meta', 'pass');
+    else if (s.viewport) add(6, 12, 'Viewport set, not responsive', 'warn');
+    else add(0, 12, 'Missing viewport meta', 'fail');
+
+    // Indexability (12)
+    if (/noindex/i.test(s.robots)) add(0, 12, 'Page is noindex', 'fail');
+    else if (/nofollow/i.test(s.robots)) add(8, 12, 'Page is nofollow', 'warn');
+    else add(12, 12, 'Indexable & followable', 'pass');
+
+    // Page weight (10)
+    const kb = s.htmlSize / 1024;
+    if (kb < 100) add(10, 10, `HTML ${kb.toFixed(0)}KB (lean)`, 'pass');
+    else if (kb < 300) add(7, 10, `HTML ${kb.toFixed(0)}KB`, 'pass');
+    else if (kb < 600) add(4, 10, `HTML ${kb.toFixed(0)}KB (heavy)`, 'warn');
+    else add(1, 10, `HTML ${kb.toFixed(0)}KB (bloated)`, 'fail');
+
+    // Fetch latency (10)
+    if (s.fetchMs < 1500) add(10, 10, `Fetched in ${(s.fetchMs/1000).toFixed(2)}s`, 'pass');
+    else if (s.fetchMs < 3000) add(6, 10, `${(s.fetchMs/1000).toFixed(2)}s fetch`, 'warn');
+    else add(2, 10, `Slow fetch ${(s.fetchMs/1000).toFixed(2)}s`, 'fail');
+
+    // Script count (6)
+    if (s.totalScripts < 15) add(6, 6, `${s.totalScripts} script tags`, 'pass');
+    else if (s.totalScripts < 30) add(3, 6, `${s.totalScripts} scripts (heavy)`, 'warn');
+    else add(1, 6, `${s.totalScripts} scripts (bloat)`, 'fail');
+
+    // Mixed content (8)
+    if (!s.isHttps) add(0, 8, 'N/A (no HTTPS)', 'info');
+    else if (s.mixedContent === 0) add(8, 8, 'No mixed content', 'pass');
+    else add(0, 8, `${s.mixedContent} insecure resources`, 'fail');
+
+    // Modern image formats (5)
+    if (s.images.total === 0) add(4, 5, 'No images', 'info');
+    else if (s.images.modern / s.images.total >= 0.3) add(5, 5, `${s.images.modern}/${s.images.total} modern formats`, 'pass');
+    else if (s.images.modern > 0) add(3, 5, `Some modern formats`, 'warn');
+    else add(1, 5, 'No WebP/AVIF used', 'warn');
+
+    // Lazy loading (4)
+    if (s.images.total < 5) add(3, 4, 'Few images', 'info');
+    else if (s.images.lazy / s.images.total >= 0.5) add(4, 4, 'Lazy-loading in use', 'pass');
+    else add(1, 4, 'Lazy-loading underused', 'warn');
+
+    // hreflang (4)
+    if (s.hreflang.length > 0) add(4, 4, `${s.hreflang.length} hreflang variants`, 'pass');
+    else add(2, 4, 'No hreflang (single locale)', 'info');
+
+    // PSI Core Web Vitals (14) if available
+    if (perf && perf.performance != null) {
+      const v = perf.performance;
+      if (v >= 90) add(14, 14, `PSI performance ${v}`, 'pass');
+      else if (v >= 50) add(8, 14, `PSI performance ${v}`, 'warn');
+      else add(2, 14, `PSI performance ${v}`, 'fail');
+    } else {
+      // fallback heuristic
+      add(7, 14, 'PSI unavailable — heuristic only', 'info');
+    }
+
+    return { score: pct((total / max) * 100), details, raw: total, max };
+  }
+
+  function scoreContent(s) {
+    const details = [];
+    let total = 0, max = 0;
+    const add = (n, m, label, pass) => { total += n; max += m; details.push({ label, score: n, max: m, status: pass }); };
+
+    // Word count (20)
+    if (s.wordCount >= 1200) add(20, 20, `${s.wordCount} words (long-form)`, 'pass');
+    else if (s.wordCount >= 600) add(15, 20, `${s.wordCount} words`, 'pass');
+    else if (s.wordCount >= 300) add(8, 20, `${s.wordCount} words (thin)`, 'warn');
+    else add(2, 20, `${s.wordCount} words (very thin)`, 'fail');
+
+    // Readability (15)
+    const f = s.flesch;
+    if (f >= 60 && f <= 80) add(15, 15, `Flesch ${f.toFixed(0)} (ideal)`, 'pass');
+    else if (f >= 40 && f <= 90) add(10, 15, `Flesch ${f.toFixed(0)}`, 'warn');
+    else add(4, 15, `Flesch ${f.toFixed(0)} (extreme)`, 'fail');
+
+    // Keyword diversity (10)
+    if (s.topKeywords.length >= 10) add(10, 10, `${s.topKeywords.length} key terms`, 'pass');
+    else if (s.topKeywords.length >= 5) add(6, 10, 'Modest vocabulary', 'warn');
+    else add(2, 10, 'Narrow vocabulary', 'fail');
+
+    // Heading-to-content ratio (10)
+    const totalH = s.headings.h1.length + s.headings.h2.length + s.headings.h3.length;
+    const ratio = s.wordCount ? totalH / (s.wordCount / 200) : 0;
+    if (ratio >= 0.5 && ratio <= 2.5) add(10, 10, 'Heading rhythm balanced', 'pass');
+    else if (ratio > 0) add(5, 10, 'Heading rhythm off', 'warn');
+    else add(0, 10, 'Almost no headings', 'fail');
+
+    // Multimedia richness (10)
+    if (s.images.total >= 5) add(10, 10, `${s.images.total} images`, 'pass');
+    else if (s.images.total >= 2) add(6, 10, `${s.images.total} images`, 'warn');
+    else add(2, 10, 'Image-poor content', 'fail');
+
+    // Top keyword density sanity (10)
+    if (s.topKeywords.length > 0) {
+      const [topWord, topCount] = s.topKeywords[0];
+      const density = (topCount / Math.max(1, s.wordCount)) * 100;
+      if (density >= 0.5 && density <= 3) add(10, 10, `"${topWord}" density ${density.toFixed(1)}%`, 'pass');
+      else if (density < 0.5) add(5, 10, `Top term density ${density.toFixed(1)}% (low)`, 'warn');
+      else add(3, 10, `Top term density ${density.toFixed(1)}% (stuffed)`, 'fail');
+    } else add(0, 10, 'No keyword signal', 'fail');
+
+    // Content sectioning (10)
+    if (totalH >= 4) add(10, 10, 'Well-sectioned', 'pass');
+    else if (totalH >= 2) add(5, 10, 'Lightly sectioned', 'warn');
+    else add(0, 10, 'Not sectioned', 'fail');
+
+    // Sentence variation (5)
+    const avgWords = s.sentenceCount ? s.wordCount / s.sentenceCount : 0;
+    if (avgWords >= 12 && avgWords <= 22) add(5, 5, `Avg ${avgWords.toFixed(1)} w/sentence`, 'pass');
+    else if (avgWords > 0) add(2, 5, `Avg ${avgWords.toFixed(1)} w/sentence`, 'warn');
+    else add(0, 5, 'No prose detected', 'fail');
+
+    // Freshness markers (10) — look for dates in content
+    const hasDate = /\b20\d{2}\b/.test(s.bodyText) || s.ldjson > 0;
+    if (hasDate) add(10, 10, 'Date/freshness markers present', 'pass');
+    else add(4, 10, 'No date markers', 'warn');
+
+    return { score: pct((total / max) * 100), details, raw: total, max };
+  }
+
+  function scoreOffPage(s, extras) {
+    const details = [];
+    let total = 0, max = 0;
+    const add = (n, m, label, pass) => { total += n; max += m; details.push({ label, score: n, max: m, status: pass }); };
+
+    // Social presence (25)
+    const socCount = s.socials.length;
+    if (socCount >= 4) add(25, 25, `${socCount} social channels linked`, 'pass');
+    else if (socCount >= 2) add(15, 25, `${socCount} social channels`, 'warn');
+    else if (socCount === 1) add(8, 25, '1 social channel', 'warn');
+    else add(0, 25, 'No social presence detected', 'fail');
+
+    // Domain authority proxy via TLD & length (15)
+    const host = s.host;
+    if (/\.(gov|edu|org)$/i.test(host)) add(15, 15, `Trusted TLD (${host.split('.').pop()})`, 'pass');
+    else if (/\.(com|net|io|co)$/i.test(host)) add(12, 15, 'Established TLD', 'pass');
+    else add(8, 15, 'Generic TLD', 'info');
+
+    // robots.txt & sitemap (15)
+    if (extras?.robotsTxt) add(8, 8, 'robots.txt found', 'pass');
+    else add(0, 8, 'No robots.txt', 'warn');
+    if (extras?.sitemap) add(7, 7, 'Sitemap discovered', 'pass');
+    else add(0, 7, 'No sitemap found', 'warn');
+
+    // Brand consistency (10) — og:site_name or schema org name
+    if (s.og['og:site_name'] || s.schemaTypes.some((t) => /Organization|WebSite/i.test(t))) {
+      add(10, 10, 'Brand entity declared', 'pass');
+    } else add(4, 10, 'No brand entity markup', 'warn');
+
+    // External citations outbound (10)
+    if (s.links.external >= 3 && s.links.external <= 30) add(10, 10, 'Healthy citation flow', 'pass');
+    else if (s.links.external > 0) add(5, 10, `${s.links.external} outbound (re-balance)`, 'warn');
+    else add(0, 10, 'No outbound citations', 'fail');
+
+    // E-E-A-T proxies: author/contact (10)
+    const eatHits = /\b(author|byline|written by|reviewed by|about us|contact)\b/i.test(s.bodyText);
+    if (eatHits || s.schemaTypes.some((t) => /Person|Author/i.test(t))) add(10, 10, 'Author/contact signals', 'pass');
+    else add(3, 10, 'Weak E-E-A-T markers', 'warn');
+
+    // HTTPS contributes to trust (10)
+    if (s.isHttps && s.mixedContent === 0) add(10, 10, 'Secure & clean', 'pass');
+    else if (s.isHttps) add(6, 10, 'HTTPS w/ mixed content', 'warn');
+    else add(0, 10, 'Insecure', 'fail');
+
+    // Indexable for backlinks to count (5)
+    if (!/noindex/i.test(s.robots)) add(5, 5, 'Open for indexing', 'pass');
+    else add(0, 5, 'Page blocks indexing', 'fail');
+
+    return { score: pct((total / max) * 100), details, raw: total, max };
+  }
+
+  // ── PSI ─────────────────────────────────────────────────────
+  async function fetchPSI(url, apiKey) {
+    try {
+      const base = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
+      const params = new URLSearchParams();
+      params.set('url', url);
+      params.set('strategy', 'mobile');
+      params.append('category', 'performance');
+      params.append('category', 'seo');
+      if (apiKey) params.set('key', apiKey);
+      const r = await fetchWithTimeout(`${base}?${params}`, {}, 30000);
+      if (!r.ok) return null;
+      const j = await r.json();
+      const cat = j.lighthouseResult?.categories || {};
+      return {
+        performance: Math.round((cat.performance?.score || 0) * 100),
+        seo: Math.round((cat.seo?.score || 0) * 100),
+        lcp: j.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue,
+        cls: j.lighthouseResult?.audits?.['cumulative-layout-shift']?.displayValue,
+        fcp: j.lighthouseResult?.audits?.['first-contentful-paint']?.displayValue,
+        tbt: j.lighthouseResult?.audits?.['total-blocking-time']?.displayValue,
+      };
+    } catch { return null; }
+  }
+
+  // ── Master audit ────────────────────────────────────────────
+  async function auditSite(url, opts = {}) {
+    const proxyKey = opts.proxy || 'allorigins';
+    const psiKey = opts.psiKey || '';
+    const usePsi = opts.usePsi !== false;
+    const onProgress = opts.onProgress || (() => {});
+
+    onProgress({ phase: 'fetch', msg: `Fetching ${url}` });
+    const page = await fetchPage(url, proxyKey);
+    onProgress({ phase: 'parse', msg: 'Parsing HTML & extracting signals' });
+    const signals = extractSignals(page.html, url, page.ms);
+
+    // Robots & sitemap probes (best-effort)
+    onProgress({ phase: 'probe', msg: 'Probing robots.txt & sitemap' });
+    const origin = new URL(url).origin;
+    const robotsProbe = await probeHead(origin + '/robots.txt', proxyKey).catch(() => ({ ok: false }));
+    let sitemapFound = false;
+    if (robotsProbe.ok && /sitemap:/i.test(robotsProbe.text || '')) sitemapFound = true;
+    if (!sitemapFound) {
+      const smProbe = await probeHead(origin + '/sitemap.xml', proxyKey).catch(() => ({ ok: false }));
+      if (smProbe.ok && /<urlset|<sitemapindex/i.test(smProbe.text || '')) sitemapFound = true;
+    }
+
+    // PSI
+    let perf = null;
+    if (usePsi) {
+      onProgress({ phase: 'psi', msg: 'Querying PageSpeed Insights' });
+      perf = await fetchPSI(url, psiKey);
+    }
+
+    // Score
+    onProgress({ phase: 'score', msg: 'Scoring signals' });
+    const onpage = scoreOnPage(signals);
+    const technical = scoreTechnical(signals, perf);
+    const content = scoreContent(signals);
+    const offpage = scoreOffPage(signals, { robotsTxt: robotsProbe.ok, sitemap: sitemapFound });
+
+    const composite = pct(
+      onpage.score * WEIGHTS.onpage +
+      technical.score * WEIGHTS.technical +
+      content.score * WEIGHTS.content +
+      offpage.score * WEIGHTS.offpage
+    );
+
+    return {
+      url,
+      host: signals.host,
+      timestamp: Date.now(),
+      signals,
+      perf,
+      extras: { robotsTxt: robotsProbe.ok, sitemap: sitemapFound },
+      categories: { onpage, technical, content, offpage },
+      composite,
+      grade: gradeOf(composite),
+    };
+  }
+
+  function gradeOf(n) {
+    if (n >= 90) return 'A';
+    if (n >= 80) return 'B';
+    if (n >= 65) return 'C';
+    if (n >= 50) return 'D';
+    return 'F';
+  }
+
+  // ── Action generation ───────────────────────────────────────
+  function generateActions(audit) {
+    const a = [];
+    const s = audit.signals;
+    const cat = audit.categories;
+    const push = (priority, category, title, problem, fix, steps, effort, impact, quickwin) => {
+      a.push({ priority, category, title, problem, fix, steps, effort, impact, quickwin: !!quickwin });
+    };
+
+    // Title issues
+    if (!s.title) push('P0', 'On-Page', 'Add a <title> tag', 'The page has no title — Google will use a generic fallback.', 'Insert a 50–60 char title containing your primary keyword.', ['Open the template file', 'Add <title>{{primary_keyword}} | {{brand}}</title>', 'Verify in browser tab'], '15 min', 95, true);
+    else if (s.titleLen > 65) push('P1', 'On-Page', 'Shorten the title tag', `Current title is ${s.titleLen} chars; SERPs truncate after ~60.`, 'Trim to 50–60 characters, lead with the keyword.', ['Identify primary keyword', 'Rewrite within 60 chars', 'Re-verify pixel width'], '20 min', 75, true);
+    else if (s.titleLen < 30) push('P2', 'On-Page', 'Expand the title tag', `Title is only ${s.titleLen} chars — wasted SERP real estate.`, 'Extend to 50–60 chars with a modifier (year, city, value-prop).', ['Add geographic or value modifier', 'Test in SERP simulator'], '15 min', 65, true);
+
+    // Meta description
+    if (!s.metaDesc) push('P0', 'On-Page', 'Write a meta description', 'No meta description — Google will auto-extract, often poorly.', 'Add a 140–160 char description with primary keyword and a CTA.', ['Draft in 155 chars', 'Include keyword + benefit + CTA', 'Add <meta name="description" content="..."> in <head>'], '20 min', 85, true);
+    else if (s.descLen > 165 || s.descLen < 70) push('P1', 'On-Page', 'Optimize meta description length', `Current length ${s.descLen} chars (target 140–160).`, 'Rewrite to ~155 chars with stronger keyword + CTA.', ['Audit current text', 'Trim or expand to 140–160', 'Re-check SERP preview'], '15 min', 70, true);
+
+    // H1
+    if (s.headings.h1.length === 0) push('P0', 'On-Page', 'Add an H1 heading', 'Page has no H1 — search engines lose primary topic signal.', 'Wrap the page\'s main heading in <h1>, include the target keyword.', ['Locate the page\'s main visible heading', 'Change tag to <h1>', 'Ensure only ONE H1'], '15 min', 90, true);
+    else if (s.headings.h1.length > 1) push('P1', 'On-Page', 'Reduce to a single H1', `${s.headings.h1.length} H1 tags found — dilutes hierarchy.`, 'Keep one H1; demote the rest to H2.', ['Identify all H1 tags', 'Demote secondary H1s to H2', 'Re-test'], '30 min', 70);
+
+    // Image alts
+    if (s.images.total > 0) {
+      const cov = s.images.withAlt / s.images.total;
+      if (cov < 0.6) push('P1', 'On-Page', 'Add alt attributes to images', `Only ${Math.round(cov*100)}% of ${s.images.total} images have alt text.`, 'Add descriptive alt text — keyword-rich where natural, empty for decorative.', ['List all images missing alt', 'Write 5–12 word descriptions', 'Mark decorative images alt=""'], '1–2 hrs', 75);
+    }
+
+    // Canonical
+    if (!s.canonical) push('P1', 'Technical', 'Add canonical URL tag', 'Without rel="canonical", duplicate URLs can split ranking signals.', 'Add <link rel="canonical" href="..."> pointing to the preferred URL.', ['Decide preferred URL form', 'Add canonical tag in <head>', 'Test variants resolve correctly'], '30 min', 70);
+
+    // HTTPS
+    if (!s.isHttps) push('P0', 'Technical', 'Migrate to HTTPS', 'Site is served over HTTP — Google ranks HTTPS sites higher and browsers warn users.', 'Obtain a TLS certificate (Let\'s Encrypt is free) and 301 all HTTP to HTTPS.', ['Install Let\'s Encrypt certificate', 'Configure 301 redirects HTTP→HTTPS', 'Update internal links & sitemaps', 'Update Search Console property'], '2–4 hrs', 100);
+
+    // Mixed content
+    if (s.isHttps && s.mixedContent > 0) push('P0', 'Technical', 'Resolve mixed content', `${s.mixedContent} insecure resources break HTTPS guarantees.`, 'Update all http:// asset references to https:// or protocol-relative.', ['Run grep for http://', 'Update to https:// where supported', 'Self-host any that don\'t support HTTPS'], '1 hr', 90, true);
+
+    // Mobile viewport
+    if (!/width=device-width/i.test(s.viewport)) push('P0', 'Technical', 'Add responsive viewport meta', 'No mobile viewport meta — failed mobile-friendliness test means crippled mobile rankings.', 'Add <meta name="viewport" content="width=device-width, initial-scale=1">.', ['Add tag in <head>', 'Test on real mobile device', 'Run Mobile-Friendly Test'], '10 min', 95, true);
+
+    // Robots noindex (unintentional)
+    if (/noindex/i.test(s.robots)) push('P0', 'Technical', 'Remove noindex directive', 'Page is blocked from indexing — it cannot rank at all.', 'Verify this is intentional; if not, remove noindex from robots meta or HTTP header.', ['Confirm intent with stakeholders', 'Remove noindex meta tag', 'Re-request indexing in Search Console'], '15 min', 100, true);
+
+    // Page weight
+    const kb = s.htmlSize / 1024;
+    if (kb > 400) push('P2', 'Technical', 'Reduce HTML payload', `HTML is ${kb.toFixed(0)}KB — affects TTFB and LCP.`, 'Defer non-critical markup, minify, and consider server-side rendering pruning.', ['Minify HTML', 'Inline only critical CSS', 'Defer below-fold sections'], '2–4 hrs', 60);
+
+    // Scripts
+    if (s.totalScripts > 25) push('P2', 'Technical', 'Audit JavaScript bloat', `${s.totalScripts} script tags — increases TBT and blocks rendering.`, 'Bundle, defer, or remove unused scripts; consider partial hydration.', ['Audit script payload', 'Defer non-critical scripts', 'Remove unused vendor code'], '1 day', 65);
+
+    // Sitemap
+    if (!audit.extras.sitemap) push('P1', 'Technical', 'Publish an XML sitemap', 'No sitemap detected — crawl coverage relies entirely on link graph.', 'Generate sitemap.xml, reference it in robots.txt, submit in Search Console.', ['Generate sitemap.xml', 'Add Sitemap: directive to robots.txt', 'Submit in GSC & Bing Webmaster'], '1 hr', 70, true);
+
+    // robots.txt
+    if (!audit.extras.robotsTxt) push('P2', 'Technical', 'Publish robots.txt', 'No robots.txt — crawlers fall back to defaults and you lose control over budget.', 'Publish robots.txt at the domain root with crawl rules and sitemap reference.', ['Create robots.txt', 'Reference sitemap', 'Disallow staging or admin paths'], '20 min', 50, true);
+
+    // Lang
+    if (!s.lang) push('P3', 'On-Page', 'Declare page language', 'No lang attribute on <html> — screen readers & translation tools struggle.', 'Add lang="en" (or appropriate locale) to <html>.', ['Add lang attribute to <html>'], '5 min', 40, true);
+
+    // Schema
+    if (s.ldjson === 0) push('P1', 'On-Page', 'Add JSON-LD structured data', 'No structured data — missing rich result eligibility.', 'Add Organization + WebSite + (page-type) schema as JSON-LD.', ['Pick relevant schema.org types', 'Generate JSON-LD blocks', 'Validate with Rich Results Test'], '2 hrs', 75);
+
+    // Word count thin
+    if (s.wordCount < 300) push('P0', 'Content', 'Address thin content', `Only ${s.wordCount} words — thin pages rarely rank for competitive terms.`, 'Expand to 800–1500 words covering search intent, FAQs, and related entities.', ['Map search intent for target query', 'Outline 6–10 sub-topics', 'Write to 1000+ words', 'Add FAQ section with schema'], '1 day', 90);
+
+    // OG
+    const ogCount = ['og:title', 'og:description', 'og:image', 'og:type'].filter((k) => s.og[k]).length;
+    if (ogCount < 4) push('P2', 'On-Page', 'Complete Open Graph tags', `Only ${ogCount}/4 core OG tags — social shares look broken.`, 'Add og:title, og:description, og:image (1200×630), og:type.', ['Add missing og:* meta tags', 'Use 1200×630 og:image', 'Validate with Facebook Sharing Debugger'], '30 min', 60, true);
+
+    // Twitter card
+    if (!s.twitter['twitter:card']) push('P3', 'On-Page', 'Add Twitter Card tags', 'No twitter:card — Twitter (X) shares render as plain links.', 'Add twitter:card, twitter:title, twitter:description, twitter:image.', ['Add twitter:* meta tags', 'Validate with Twitter Card Validator'], '20 min', 40, true);
+
+    // Social channels
+    if (s.socials.length < 2) push('P2', 'Off-Page', 'Build social channel presence', `Only ${s.socials.length} social channels linked — weak brand entity signal.`, 'Link to active social profiles in footer and add sameAs in Organization schema.', ['Audit active channels', 'Link in footer', 'Add sameAs[] to Organization JSON-LD'], '1 hr', 55);
+
+    // Internal links
+    if (s.links.internal < 3) push('P1', 'On-Page', 'Improve internal linking', `Only ${s.links.internal} internal links — orphans hurt crawl & link equity.`, 'Add 5–15 contextual internal links to related pages.', ['Identify related pages', 'Add contextual in-content links', 'Audit anchor text diversity'], '2 hrs', 70);
+
+    // hreflang for international
+    // (skip if single locale assumed)
+
+    // Performance via PSI
+    if (audit.perf && audit.perf.performance != null && audit.perf.performance < 70) {
+      push('P1', 'Technical', `Improve Core Web Vitals (PSI ${audit.perf.performance})`, `Lighthouse performance score is ${audit.perf.performance}/100. LCP ${audit.perf.lcp || '?'}, CLS ${audit.perf.cls || '?'}.`, 'Optimize LCP image, defer JS, reduce CLS via dimensioned images & reserved space.', ['Identify LCP element', 'Preload LCP asset', 'Defer non-critical JS', 'Add width/height to images', 'Inline critical CSS'], '1–3 days', 85);
+    }
+
+    // Sort by composite priority value
+    const order = { P0: 0, P1: 1, P2: 2, P3: 3 };
+    a.sort((x, y) => order[x.priority] - order[y.priority] || y.impact - x.impact);
+    return a;
+  }
+
+  // ── Build audit items for the UI grid ──────────────────────
+  function buildAuditItems(audit) {
+    const s = audit.signals;
+    const groups = { onpage: [], technical: [], content: [], offpage: [] };
+    const push = (g, status, title, detail, value) => groups[g].push({ status, title, detail, value });
+
+    // On-page
+    push('onpage', s.title ? (s.titleLen >= 30 && s.titleLen <= 65 ? 'pass' : 'warn') : 'fail',
+      'Title Tag', s.title || '— missing —', `${s.titleLen} ch`);
+    push('onpage', s.metaDesc ? (s.descLen >= 70 && s.descLen <= 165 ? 'pass' : 'warn') : 'fail',
+      'Meta Description', s.metaDesc || '— missing —', `${s.descLen} ch`);
+    push('onpage', s.headings.h1.length === 1 ? 'pass' : (s.headings.h1.length === 0 ? 'fail' : 'warn'),
+      'H1 Heading', s.headings.h1[0] || '— missing —', `${s.headings.h1.length}`);
+    push('onpage', 'info', 'Heading Hierarchy',
+      `H2: ${s.headings.h2.length}, H3: ${s.headings.h3.length}, H4: ${s.headings.h4.length}`,
+      `${s.headings.h1.length + s.headings.h2.length + s.headings.h3.length}`);
+    push('onpage', s.canonical ? 'pass' : 'warn', 'Canonical', s.canonical || 'not set', s.canonical ? 'set' : '—');
+    const ogCount = ['og:title','og:description','og:image','og:type'].filter(k=>s.og[k]).length;
+    push('onpage', ogCount === 4 ? 'pass' : (ogCount >= 2 ? 'warn' : 'fail'),
+      'Open Graph', `${ogCount}/4 core tags · image: ${s.og['og:image'] ? 'yes' : 'no'}`, `${ogCount}/4`);
+    push('onpage', s.twitter['twitter:card'] ? 'pass' : 'warn',
+      'Twitter Card', s.twitter['twitter:card'] || 'not set', s.twitter['twitter:card'] || '—');
+    push('onpage', s.images.total === 0 ? 'info' : (s.images.withAlt / s.images.total >= 0.9 ? 'pass' : 'warn'),
+      'Image Alt Coverage', `${s.images.withAlt}/${s.images.total} have alt`,
+      s.images.total ? `${Math.round(s.images.withAlt/s.images.total*100)}%` : '—');
+    push('onpage', s.links.internal >= 5 ? 'pass' : 'warn', 'Internal Links', `${s.links.internal} on page`, `${s.links.internal}`);
+    push('onpage', 'info', 'External Links', `${s.links.external} outbound · ${s.links.nofollow} nofollow`, `${s.links.external}`);
+    push('onpage', s.ldjson > 0 ? 'pass' : 'warn',
+      'Structured Data',
+      s.ldjson ? `${s.ldjson} JSON-LD blocks · ${s.schemaTypes.slice(0,4).join(', ') || 'untyped'}` : 'no JSON-LD',
+      `${s.ldjson}`);
+    push('onpage', s.lang ? 'pass' : 'warn', 'Language', s.lang || 'not declared', s.lang || '—');
+
+    // Technical
+    push('technical', s.isHttps ? 'pass' : 'fail', 'HTTPS', s.isHttps ? 'TLS enabled' : 'HTTP only', s.isHttps ? 'on' : 'off');
+    push('technical', /width=device-width/i.test(s.viewport) ? 'pass' : 'fail',
+      'Mobile Viewport', s.viewport || 'not set', /width=device-width/i.test(s.viewport) ? 'OK' : '—');
+    push('technical', /noindex/i.test(s.robots) ? 'fail' : 'pass',
+      'Robots Meta', s.robots || 'default (index, follow)', /noindex/i.test(s.robots) ? 'noindex' : 'OK');
+    push('technical', audit.extras.robotsTxt ? 'pass' : 'warn',
+      'robots.txt', audit.extras.robotsTxt ? 'found at root' : 'not found', audit.extras.robotsTxt ? 'OK' : '—');
+    push('technical', audit.extras.sitemap ? 'pass' : 'warn',
+      'XML Sitemap', audit.extras.sitemap ? 'discovered' : 'not discovered', audit.extras.sitemap ? 'OK' : '—');
+    push('technical', s.fetchMs < 2000 ? 'pass' : (s.fetchMs < 4000 ? 'warn' : 'fail'),
+      'Fetch Latency', `via CORS proxy (not direct origin time)`, `${(s.fetchMs/1000).toFixed(2)}s`);
+    push('technical', (s.htmlSize/1024) < 300 ? 'pass' : 'warn',
+      'HTML Payload', `${(s.htmlSize/1024).toFixed(1)} KB raw markup`, `${(s.htmlSize/1024).toFixed(0)}KB`);
+    push('technical', s.totalScripts < 20 ? 'pass' : 'warn',
+      'Script Count', `${s.totalScripts} <script> tags`, `${s.totalScripts}`);
+    push('technical', s.stylesheets < 8 ? 'pass' : 'warn',
+      'Stylesheets', `${s.stylesheets} external + ${s.inlineStyles} inline`, `${s.stylesheets}`);
+    push('technical', s.isHttps && s.mixedContent === 0 ? 'pass' : (s.mixedContent > 0 ? 'fail' : 'info'),
+      'Mixed Content', s.mixedContent > 0 ? `${s.mixedContent} insecure assets` : 'none', `${s.mixedContent}`);
+    push('technical', s.images.total === 0 ? 'info' : (s.images.modern/s.images.total >= 0.3 ? 'pass' : 'warn'),
+      'Modern Image Formats', `${s.images.modern}/${s.images.total} WebP/AVIF`, `${s.images.modern}`);
+    push('technical', s.hreflang.length > 0 ? 'pass' : 'info',
+      'hreflang', s.hreflang.length ? s.hreflang.join(', ') : 'single locale', `${s.hreflang.length}`);
+    if (audit.perf) {
+      push('technical', audit.perf.performance >= 80 ? 'pass' : (audit.perf.performance >= 50 ? 'warn' : 'fail'),
+        'PSI Performance', `LCP ${audit.perf.lcp || '?'} · CLS ${audit.perf.cls || '?'} · TBT ${audit.perf.tbt || '?'}`,
+        `${audit.perf.performance}`);
+    }
+
+    // Content
+    push('content', s.wordCount >= 600 ? 'pass' : (s.wordCount >= 300 ? 'warn' : 'fail'),
+      'Word Count', `${s.sentenceCount} sentences`, `${s.wordCount} w`);
+    push('content', s.flesch >= 60 && s.flesch <= 80 ? 'pass' : 'warn',
+      'Readability (Flesch)', readingLevel(s.flesch), `${s.flesch.toFixed(0)}`);
+    const totalH = s.headings.h1.length + s.headings.h2.length + s.headings.h3.length;
+    push('content', totalH >= 4 ? 'pass' : (totalH >= 2 ? 'warn' : 'fail'),
+      'Sectioning', `${totalH} top-level headings`, `${totalH}`);
+    push('content', 'info', 'Top Keywords',
+      s.topKeywords.slice(0, 6).map(([w, n]) => `${w}(${n})`).join(', ') || '—',
+      `${s.topKeywords.length}`);
+    if (s.topKeywords[0]) {
+      const dens = (s.topKeywords[0][1] / Math.max(1, s.wordCount)) * 100;
+      push('content', dens >= 0.5 && dens <= 3 ? 'pass' : 'warn',
+        'Top Keyword Density', `"${s.topKeywords[0][0]}" appears ${s.topKeywords[0][1]}×`, `${dens.toFixed(2)}%`);
+    }
+    push('content', s.images.total >= 3 ? 'pass' : 'warn',
+      'Multimedia', `${s.images.total} images`, `${s.images.total}`);
+    push('content', 'info', 'Forms', `${s.forms} forms on page (lead-capture proxy)`, `${s.forms}`);
+
+    // Off-page
+    push('offpage', s.socials.length >= 3 ? 'pass' : (s.socials.length >= 1 ? 'warn' : 'fail'),
+      'Social Channels', s.socials.length ? s.socials.join(', ') : 'none linked', `${s.socials.length}`);
+    push('offpage', 'info', 'Domain', s.host, s.host.split('.').pop());
+    push('offpage', s.og['og:site_name'] ? 'pass' : 'warn',
+      'Brand Entity', s.og['og:site_name'] || 'no og:site_name', s.og['og:site_name'] ? 'set' : '—');
+    push('offpage', s.schemaTypes.some(t => /Organization|WebSite/i.test(t)) ? 'pass' : 'warn',
+      'Organization Schema',
+      s.schemaTypes.filter(t => /Organization|WebSite|LocalBusiness/i.test(t)).join(', ') || 'not declared',
+      s.schemaTypes.some(t => /Organization/i.test(t)) ? 'OK' : '—');
+    push('offpage', s.links.external >= 3 && s.links.external <= 30 ? 'pass' : 'warn',
+      'Outbound Citations', `${s.links.external} external links`, `${s.links.external}`);
+    push('offpage', 'info', 'E-E-A-T Markers',
+      /(author|byline|reviewed by|about us)/i.test(s.bodyText) ? 'author/about signals present' : 'weak — consider adding author bylines & about page',
+      /(author|byline|reviewed by|about us)/i.test(s.bodyText) ? 'OK' : '—');
+
+    return groups;
+  }
+
+  function readingLevel(f) {
+    if (f >= 90) return 'Very easy (5th grade)';
+    if (f >= 80) return 'Easy (6th grade)';
+    if (f >= 70) return 'Fairly easy (7th)';
+    if (f >= 60) return 'Plain English (8–9th)';
+    if (f >= 50) return 'Fairly difficult (10–12th)';
+    if (f >= 30) return 'Difficult (college)';
+    return 'Very difficult (graduate)';
+  }
+
+  // Expose
+  global.SERPSCOPE = global.SERPSCOPE || {};
+  global.SERPSCOPE.analyzer = {
+    auditSite, generateActions, buildAuditItems,
+    normalizeUrl, domainOf, gradeOf, WEIGHTS,
+  };
+})(window);

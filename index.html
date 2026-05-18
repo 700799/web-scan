@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+  <meta name="theme-color" content="#0a0e1a" />
+  <meta name="description" content="Professional SEO intelligence platform. On-page & off-page audits, competitor benchmarking, prioritized action plans, scheduled monitoring." />
+  <title>SERPSCOPE — SEO Intelligence Platform</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230a0e1a'/%3E%3Cpath d='M16 40 L28 28 L36 36 L48 22' stroke='%2300d4aa' stroke-width='4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='48' cy='22' r='4' fill='%2300d4aa'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+  <link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+
+<!-- ╔══════════════════════ TOP BAR ═════════════════════╗ -->
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand-logo" viewBox="0 0 64 64" aria-hidden="true">
+      <rect width="64" height="64" rx="12" fill="#0f1626"/>
+      <path d="M16 40 L28 28 L36 36 L48 22" stroke="#00d4aa" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="48" cy="22" r="4" fill="#00d4aa"/>
+    </svg>
+    <div class="brand-text">
+      <h1>SERPSCOPE</h1>
+      <span>SEO Intelligence Platform</span>
+    </div>
+  </div>
+  <nav class="topnav">
+    <button class="nav-link active" data-view="dashboard">Dashboard</button>
+    <button class="nav-link" data-view="schedule">Schedule</button>
+    <button class="nav-link" data-view="settings">Settings</button>
+    <button class="nav-link" data-view="about">About</button>
+  </nav>
+  <div class="topbar-right">
+    <span class="status-dot" id="status-dot" title="System status"></span>
+    <span class="status-text" id="status-text">Ready</span>
+  </div>
+</header>
+
+<main class="app">
+
+<!-- ╔══════════════════════ DASHBOARD ═════════════════════╗ -->
+<section class="view active" id="view-dashboard">
+
+  <!-- Input panel -->
+  <div class="panel input-panel">
+    <div class="panel-head">
+      <div>
+        <h2>New Audit</h2>
+        <p class="muted">Run a comprehensive on-page &amp; off-page SEO analysis with competitive benchmarking.</p>
+      </div>
+      <div class="panel-head-meta">
+        <span class="badge">v2.4 · Engine</span>
+        <span class="badge subtle" id="last-run-meta">No previous runs</span>
+      </div>
+    </div>
+
+    <div class="form-grid">
+      <div class="field span-2">
+        <label for="target-url">Target Domain / URL</label>
+        <div class="input-with-icon">
+          <span class="ic">https://</span>
+          <input id="target-url" type="text" placeholder="example.com" autocomplete="off" spellcheck="false" />
+        </div>
+        <small class="hint">The primary domain you want to audit. Include path for page-level analysis.</small>
+      </div>
+
+      <div class="field">
+        <label for="industry-kw">Industry / Primary Keywords <span class="opt">optional</span></label>
+        <input id="industry-kw" type="text" placeholder="dental implants, los angeles" autocomplete="off" />
+        <small class="hint">Used for competitor discovery &amp; keyword relevance scoring.</small>
+      </div>
+
+      <div class="field">
+        <label for="market-region">Target Market</label>
+        <select id="market-region">
+          <option value="us">United States</option>
+          <option value="uk">United Kingdom</option>
+          <option value="ca">Canada</option>
+          <option value="au">Australia</option>
+          <option value="de">Germany</option>
+          <option value="fr">France</option>
+          <option value="global">Global</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="competitors-block">
+      <div class="competitors-head">
+        <div>
+          <h3>Competitor Set <span class="opt">5 nearest</span></h3>
+          <p class="muted">Enter URLs manually or use auto-discovery powered by SERP analysis.</p>
+        </div>
+        <div class="competitors-actions">
+          <button class="btn ghost" id="btn-discover" type="button">
+            <svg viewBox="0 0 24 24" width="14" height="14"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none"/><path d="M20 20l-3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Auto-discover
+          </button>
+          <button class="btn ghost" id="btn-clear-comp" type="button">Clear</button>
+        </div>
+      </div>
+      <div class="competitor-inputs">
+        <div class="comp-row"><span class="comp-num">1</span><input class="competitor-url" data-idx="0" type="text" placeholder="competitor-one.com" /></div>
+        <div class="comp-row"><span class="comp-num">2</span><input class="competitor-url" data-idx="1" type="text" placeholder="competitor-two.com" /></div>
+        <div class="comp-row"><span class="comp-num">3</span><input class="competitor-url" data-idx="2" type="text" placeholder="competitor-three.com" /></div>
+        <div class="comp-row"><span class="comp-num">4</span><input class="competitor-url" data-idx="3" type="text" placeholder="competitor-four.com" /></div>
+        <div class="comp-row"><span class="comp-num">5</span><input class="competitor-url" data-idx="4" type="text" placeholder="competitor-five.com" /></div>
+      </div>
+    </div>
+
+    <div class="advanced">
+      <details>
+        <summary>Advanced Options</summary>
+        <div class="form-grid">
+          <div class="field">
+            <label>Audit Depth</label>
+            <select id="audit-depth">
+              <option value="standard" selected>Standard (homepage)</option>
+              <option value="deep">Deep (homepage + 3 internal)</option>
+              <option value="page">Single page (URL only)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Performance Source</label>
+            <select id="perf-source">
+              <option value="psi" selected>Google PageSpeed Insights</option>
+              <option value="local">Local heuristics only</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>CORS Proxy</label>
+            <select id="cors-proxy">
+              <option value="allorigins" selected>allorigins.win</option>
+              <option value="corsproxy">corsproxy.io</option>
+              <option value="codetabs">codetabs.com</option>
+            </select>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="run-row">
+      <button id="run-audit" class="btn primary big">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Run Full Audit
+      </button>
+      <div class="run-meta">
+        <span id="run-cost">Est. 30–60s · 6 targets · ~120 signals</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Live progress -->
+  <div class="panel progress-panel" id="progress-panel" hidden>
+    <div class="progress-head">
+      <h3>Audit in Progress</h3>
+      <span class="progress-pct" id="progress-pct">0%</span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+    <ul class="progress-log" id="progress-log"></ul>
+  </div>
+
+  <!-- ───── REPORT ───── -->
+  <div id="report" hidden>
+
+    <!-- Executive summary -->
+    <div class="panel report-hero">
+      <div class="hero-left">
+        <div class="hero-label">Executive Summary</div>
+        <h2 id="hero-target">—</h2>
+        <p class="hero-tagline" id="hero-tagline">—</p>
+        <div class="hero-kpis">
+          <div class="kpi">
+            <div class="kpi-label">Overall Score</div>
+            <div class="kpi-value" id="kpi-score">—</div>
+            <div class="kpi-delta" id="kpi-delta"></div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Rank vs. Set</div>
+            <div class="kpi-value" id="kpi-rank">—</div>
+            <div class="kpi-delta muted">of 6 sites</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Critical Issues</div>
+            <div class="kpi-value danger" id="kpi-critical">—</div>
+            <div class="kpi-delta muted">priority P0</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Quick Wins</div>
+            <div class="kpi-value good" id="kpi-wins">—</div>
+            <div class="kpi-delta muted">≤ 1 hr fixes</div>
+          </div>
+        </div>
+      </div>
+      <div class="hero-right">
+        <canvas id="gauge" width="220" height="220"></canvas>
+        <div class="grade-badge" id="grade-badge">—</div>
+      </div>
+    </div>
+
+    <!-- Report actions toolbar -->
+    <div class="report-toolbar">
+      <button class="btn small" id="btn-export-json">
+        <svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Export JSON
+      </button>
+      <button class="btn small" id="btn-export-csv">Export CSV</button>
+      <button class="btn small" id="btn-print">Print / PDF</button>
+      <button class="btn small primary" id="btn-email">
+        <svg viewBox="0 0 24 24" width="14" height="14"><path d="M4 6h16v12H4z M4 6l8 7 8-7" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+        Email Report
+      </button>
+      <span class="toolbar-spacer"></span>
+      <span class="toolbar-meta" id="report-meta">—</span>
+    </div>
+
+    <!-- Category scorecards -->
+    <div class="scorecards" id="scorecards"></div>
+
+    <!-- Competitor comparison -->
+    <div class="panel">
+      <div class="panel-head"><h3>Competitive Benchmark</h3>
+        <div class="tabs">
+          <button class="tab active" data-chart="radar">Radar</button>
+          <button class="tab" data-chart="bars">Bars</button>
+          <button class="tab" data-chart="matrix">Matrix</button>
+        </div>
+      </div>
+      <div class="comparison-grid">
+        <div class="chart-wrap"><canvas id="competitor-chart"></canvas></div>
+        <div class="rank-table-wrap">
+          <table class="rank-table" id="rank-table">
+            <thead><tr><th>#</th><th>Site</th><th>Score</th><th>On-Page</th><th>Tech</th><th>Content</th><th>Off-Page</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- On-page audit -->
+    <div class="panel">
+      <div class="panel-head"><h3>On-Page SEO Audit</h3><span class="muted small">Signals extracted from rendered HTML</span></div>
+      <div class="audit-grid" id="onpage-grid"></div>
+    </div>
+
+    <!-- Technical -->
+    <div class="panel">
+      <div class="panel-head"><h3>Technical SEO</h3><span class="muted small">Indexability, performance, crawlability</span></div>
+      <div class="audit-grid" id="tech-grid"></div>
+    </div>
+
+    <!-- Content -->
+    <div class="panel">
+      <div class="panel-head"><h3>Content Analysis</h3><span class="muted small">Depth, readability, semantic coverage</span></div>
+      <div class="audit-grid" id="content-grid"></div>
+    </div>
+
+    <!-- Off-page -->
+    <div class="panel">
+      <div class="panel-head"><h3>Off-Page Signals</h3><span class="muted small">Authority, presence, trust indicators</span></div>
+      <div class="audit-grid" id="offpage-grid"></div>
+    </div>
+
+    <!-- Action plan -->
+    <div class="panel actions-panel">
+      <div class="panel-head"><h3>Prioritized Action Plan</h3>
+        <div class="legend">
+          <span class="pill p0">P0 critical</span>
+          <span class="pill p1">P1 high</span>
+          <span class="pill p2">P2 medium</span>
+          <span class="pill p3">P3 low</span>
+        </div>
+      </div>
+      <div class="actions-toolbar">
+        <button class="filter-pill active" data-filter="all">All</button>
+        <button class="filter-pill" data-filter="P0">Critical</button>
+        <button class="filter-pill" data-filter="P1">High</button>
+        <button class="filter-pill" data-filter="P2">Medium</button>
+        <button class="filter-pill" data-filter="P3">Low</button>
+        <button class="filter-pill" data-filter="quickwin">Quick wins</button>
+      </div>
+      <div class="actions-list" id="actions-list"></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ╔══════════════════════ SCHEDULE ═════════════════════╗ -->
+<section class="view" id="view-schedule">
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Scheduled Monitoring</h2>
+        <p class="muted">Receive periodic SEO health reports for your tracked properties.</p>
+      </div>
+    </div>
+
+    <div class="schedule-tiers">
+      <div class="tier-card">
+        <h4>Browser-side reminders</h4>
+        <p>Lightweight schedule stored in your browser. Opens this dashboard with the saved audit pre-loaded when due, and dispatches a Web Notification if permitted.</p>
+        <span class="tier-tag good">No setup required</span>
+      </div>
+      <div class="tier-card">
+        <h4>Email digest (EmailJS)</h4>
+        <p>Forward each scheduled run to one or more recipients via EmailJS. Configure the service in <em>Settings</em>.</p>
+        <span class="tier-tag">Free tier · 200/mo</span>
+      </div>
+      <div class="tier-card">
+        <h4>GitHub Actions (recommended)</h4>
+        <p>True server-side cron via the bundled workflow at <code>.github/workflows/scheduled-audit.yml</code>. Runs even when your browser is closed.</p>
+        <span class="tier-tag primary">Production grade</span>
+      </div>
+    </div>
+
+    <div class="schedule-form">
+      <h3>Create schedule</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label>Schedule name</label>
+          <input id="sch-name" type="text" placeholder="Weekly homepage audit" />
+        </div>
+        <div class="field">
+          <label>Target URL</label>
+          <input id="sch-url" type="text" placeholder="https://example.com" />
+        </div>
+        <div class="field">
+          <label>Frequency</label>
+          <select id="sch-freq">
+            <option value="daily">Daily</option>
+            <option value="weekly" selected>Weekly</option>
+            <option value="biweekly">Bi-weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Time of day</label>
+          <input id="sch-time" type="time" value="09:00" />
+        </div>
+        <div class="field span-2">
+          <label>Email recipients <span class="opt">comma-separated</span></label>
+          <input id="sch-emails" type="text" placeholder="seo@example.com, manager@example.com" />
+        </div>
+        <div class="field span-2">
+          <label>Competitor set <span class="opt">comma-separated</span></label>
+          <input id="sch-comps" type="text" placeholder="competitor-one.com, competitor-two.com, ..." />
+        </div>
+      </div>
+      <div class="run-row">
+        <button class="btn primary" id="btn-save-schedule">Save Schedule</button>
+        <button class="btn ghost" id="btn-test-schedule">Send Test Email</button>
+      </div>
+    </div>
+
+    <div class="schedule-list">
+      <h3>Active schedules</h3>
+      <table class="rank-table">
+        <thead><tr><th>Name</th><th>URL</th><th>Frequency</th><th>Next run</th><th>Last status</th><th></th></tr></thead>
+        <tbody id="schedules-tbody"><tr><td colspan="6" class="muted center">No schedules configured.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ╔══════════════════════ SETTINGS ═════════════════════╗ -->
+<section class="view" id="view-settings">
+  <div class="panel">
+    <div class="panel-head"><h2>Settings</h2></div>
+
+    <h3>Google PageSpeed Insights</h3>
+    <p class="muted">Optional API key. Without one, you get 25k requests/day per IP via the public quota.</p>
+    <div class="form-grid">
+      <div class="field span-2">
+        <label>API key</label>
+        <input id="set-psi-key" type="text" placeholder="AIza..." />
+      </div>
+    </div>
+
+    <h3>EmailJS configuration</h3>
+    <p class="muted">Used for emailing reports and scheduled digests. <a href="https://www.emailjs.com" target="_blank" rel="noopener">Create a free account</a>, add an email service + template, then paste the IDs below.</p>
+    <div class="form-grid">
+      <div class="field"><label>Public key</label><input id="set-ejs-key" type="text" placeholder="user_xxxxxxxxxxxxx" /></div>
+      <div class="field"><label>Service ID</label><input id="set-ejs-service" type="text" placeholder="service_xxxxxxx" /></div>
+      <div class="field"><label>Template ID</label><input id="set-ejs-tpl" type="text" placeholder="template_xxxxxxx" /></div>
+      <div class="field"><label>From name</label><input id="set-ejs-from" type="text" placeholder="SERPSCOPE" /></div>
+    </div>
+
+    <h3>Branding</h3>
+    <div class="form-grid">
+      <div class="field"><label>Company name on reports</label><input id="set-company" type="text" placeholder="Your agency" /></div>
+      <div class="field"><label>Report footer</label><input id="set-footer" type="text" placeholder="Prepared by Your Agency · Confidential" /></div>
+    </div>
+
+    <div class="run-row">
+      <button class="btn primary" id="btn-save-settings">Save Settings</button>
+      <button class="btn ghost" id="btn-reset-settings">Reset</button>
+    </div>
+  </div>
+</section>
+
+<!-- ╔══════════════════════ ABOUT ═════════════════════╗ -->
+<section class="view" id="view-about">
+  <div class="panel">
+    <div class="panel-head"><h2>About SERPSCOPE</h2></div>
+    <p>SERPSCOPE is a fully client-side SEO intelligence platform. It runs in your browser, fetches public pages through a CORS proxy, and computes a multi-dimensional SEO score against five competitors. No data leaves your device except outbound page fetches.</p>
+
+    <h3>What it measures</h3>
+    <ul class="bullets">
+      <li><b>On-Page</b> — titles, meta descriptions, heading hierarchy, image alt coverage, internal/external linking, Open Graph &amp; Twitter Cards, canonicals, structured data (JSON-LD).</li>
+      <li><b>Technical</b> — HTTPS, mobile viewport, robots directives, sitemap discovery, response time, page weight, Core Web Vitals (via PSI), hreflang.</li>
+      <li><b>Content</b> — word count, Flesch reading ease, keyword density, semantic coverage, heading-to-content ratio, multimedia richness.</li>
+      <li><b>Off-Page</b> — protocol &amp; security, social presence, domain hints, content freshness signals, third-party trust markers.</li>
+    </ul>
+
+    <h3>Scoring methodology</h3>
+    <p>Each signal is normalized 0–100 and weighted by category. The composite SERPSCOPE Index uses: On-Page 30% · Technical 30% · Content 25% · Off-Page 15%. Action priorities (P0–P3) are derived from a signal's impact × ease ratio.</p>
+
+    <h3>Limitations</h3>
+    <p class="muted">Off-page authority (backlink graph, referring domains) requires a commercial API such as Ahrefs, Majestic, or Moz. SERPSCOPE estimates off-page health using public signals; for true link metrics, integrate one of those providers via the Settings panel.</p>
+
+    <h3>Open source</h3>
+    <p>Single-page app, MIT-style. Hosted on GitHub Pages. Edit <code>assets/js/analyzer.js</code> to tune scoring weights.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="footbar">
+  <span>&copy; SERPSCOPE · <span id="footer-company">Independent</span></span>
+  <span class="muted">All analysis runs locally in your browser.</span>
+</footer>
+
+<!-- Email modal -->
+<div class="modal" id="email-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>Email this report</h3>
+      <button class="modal-close" id="email-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Recipients <span class="opt">comma-separated</span></label>
+        <input id="email-to" type="text" placeholder="client@example.com" />
+      </div>
+      <div class="field">
+        <label>Subject</label>
+        <input id="email-subject" type="text" />
+      </div>
+      <div class="field">
+        <label>Message</label>
+        <textarea id="email-message" rows="5"></textarea>
+      </div>
+      <div class="field">
+        <label class="check"><input type="checkbox" id="email-attach-json" checked /> Include raw audit JSON inline</label>
+      </div>
+      <div id="email-status" class="email-status"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="email-cancel">Cancel</button>
+      <button class="btn primary" id="email-send">Send</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast" hidden></div>
+
+<script src="assets/js/analyzer.js"></script>
+<script src="assets/js/competitors.js"></script>
+<script src="assets/js/renderer.js"></script>
+<script src="assets/js/email.js"></script>
+<script src="assets/js/scheduler.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
