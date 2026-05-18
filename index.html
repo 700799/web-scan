@@ -241,6 +241,87 @@
       </div>
     </div>
 
+    <!-- ╔══ LIGHTHOUSE / PERFORMANCE DEEP DIVE ══╗ -->
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3>Lighthouse · Headless Chrome</h3>
+          <span class="muted small">Real Lighthouse audits run on Google's edge — Performance, A11y, Best Practices, SEO, PWA</span>
+        </div>
+        <div class="device-toggle">
+          <button data-device="mobile" class="active">📱 Mobile</button>
+          <button data-device="desktop">🖥 Desktop</button>
+        </div>
+      </div>
+      <div class="lh-scores" id="lh-scores"></div>
+    </div>
+
+    <!-- Core Web Vitals -->
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3>Core Web Vitals · Lab + Field</h3>
+          <span class="muted small" id="cwv-field-note">Lab: simulated mobile 4G. Field: real Chrome users (CrUX, 28-day p75).</span>
+        </div>
+      </div>
+      <div class="cwv-grid" id="cwv-grid"></div>
+    </div>
+
+    <!-- Filmstrip -->
+    <div class="panel">
+      <div class="panel-head"><h3>Rendering Timeline</h3><span class="muted small">Filmstrip captured by headless Chrome</span></div>
+      <div id="filmstrip"></div>
+    </div>
+
+    <!-- Performance breakdown -->
+    <div class="panel">
+      <div class="panel-head"><h3>Performance Breakdown</h3><span class="muted small">Resources, third parties, main-thread, LCP element</span></div>
+      <div id="perf-breakdown"></div>
+    </div>
+
+    <!-- Mobile compatibility -->
+    <div class="panel">
+      <div class="panel-head"><h3>Mobile Compatibility</h3><span class="muted small">Viewport, tap targets, font sizing, responsive imagery</span></div>
+      <div class="audit-grid" id="mobile-compat-grid"></div>
+    </div>
+
+    <!-- Detailed blockers -->
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3>Detailed Blockers</h3>
+          <span class="muted small">Every Lighthouse audit failure + client heuristic, with savings, affected elements, and remediation steps</span>
+        </div>
+      </div>
+      <div class="blocker-summary" id="blocker-summary"></div>
+      <div class="blocker-filters">
+        <div class="filter-group">
+          <span class="filter-label">Severity</span>
+          <button class="filter-pill active" data-blocker-sev="all">All</button>
+          <button class="filter-pill" data-blocker-sev="P0">P0</button>
+          <button class="filter-pill" data-blocker-sev="P1">P1</button>
+          <button class="filter-pill" data-blocker-sev="P2">P2</button>
+          <button class="filter-pill" data-blocker-sev="P3">P3</button>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Category</span>
+          <button class="filter-pill active" data-blocker-cat="all">All</button>
+          <button class="filter-pill" data-blocker-cat="Performance">Performance</button>
+          <button class="filter-pill" data-blocker-cat="Mobile">Mobile</button>
+          <button class="filter-pill" data-blocker-cat="SEO">SEO</button>
+          <button class="filter-pill" data-blocker-cat="Accessibility">A11y</button>
+          <button class="filter-pill" data-blocker-cat="Best Practices">Best Pract.</button>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Device</span>
+          <button class="filter-pill active" data-blocker-device="all">Both</button>
+          <button class="filter-pill" data-blocker-device="mobile">Mobile</button>
+          <button class="filter-pill" data-blocker-device="desktop">Desktop</button>
+        </div>
+      </div>
+      <div class="blockers-list" id="blockers-list"></div>
+    </div>
+
     <!-- On-page audit -->
     <div class="panel">
       <div class="panel-head"><h3>On-Page SEO Audit</h3><span class="muted small">Signals extracted from rendered HTML</span></div>
@@ -470,8 +551,11 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="assets/js/analyzer.js"></script>
+<script src="assets/js/lighthouse.js"></script>
+<script src="assets/js/blockers.js"></script>
 <script src="assets/js/competitors.js"></script>
 <script src="assets/js/renderer.js"></script>
+<script src="assets/js/perf-renderer.js"></script>
 <script src="assets/js/email.js"></script>
 <script src="assets/js/scheduler.js"></script>
 <script src="assets/js/app.js"></script>

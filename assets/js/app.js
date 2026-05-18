@@ -192,6 +192,28 @@
     R.renderScorecards(target);
     R.renderCompetitorChart(target, comps, 'radar');
     R.renderRankTable(target, comps);
+
+    // Lighthouse / performance deep-dive
+    const P = SS.perf;
+    if (P && target.lighthouse) {
+      P.renderLighthouseScores(target, 'mobile');
+      P.renderCWV(target, 'mobile');
+      P.renderFilmstrip(target, 'mobile');
+      P.renderPerfBreakdown(target, 'mobile');
+      P.renderMobileCompat(target);
+      P.bindDeviceToggle(target);
+    } else if (P) {
+      // No Lighthouse data — still render mobile compat from client signals
+      P.renderMobileCompat(target);
+    }
+
+    // Detailed blockers
+    if (P && target.blockers?.length) {
+      P.renderBlockers(target.blockers);
+    } else if (P) {
+      P.renderBlockers([]);
+    }
+
     const groups = A.buildAuditItems(target);
     R.renderAuditGrid('onpage-grid', groups.onpage);
     R.renderAuditGrid('tech-grid', groups.technical);
@@ -409,11 +431,24 @@
     document.getElementById('email-send').addEventListener('click', sendEmailFromModal);
 
     // Action filters
-    document.querySelectorAll('.filter-pill').forEach((b) => {
+    document.querySelectorAll('.actions-toolbar .filter-pill').forEach((b) => {
       b.addEventListener('click', () => {
-        document.querySelectorAll('.filter-pill').forEach((x) => x.classList.remove('active'));
+        document.querySelectorAll('.actions-toolbar .filter-pill').forEach((x) => x.classList.remove('active'));
         b.classList.add('active');
         R.applyActionFilter(b.dataset.filter);
+      });
+    });
+
+    // Blocker filters — grouped (severity, category, device) so each group is independent
+    ['Sev', 'Cat', 'Device'].forEach((kind) => {
+      const attr = `data-blocker-${kind.toLowerCase()}`;
+      document.querySelectorAll(`[${attr}]`).forEach((b) => {
+        b.addEventListener('click', () => {
+          document.querySelectorAll(`[${attr}]`).forEach((x) => x.classList.remove('active'));
+          b.classList.add('active');
+          SS.perf?.setBlockerFilter(kind.toLowerCase() === 'device' ? 'device' : (kind === 'Sev' ? 'sev' : 'cat'),
+            b.getAttribute(attr));
+        });
       });
     });
 
