@@ -1,0 +1,77 @@
+name: Scheduled SEO Audit
+
+# Run weekly on Mondays at 09:00 UTC. Adjust the cron to taste.
+# Configure the inputs by editing the env block below, OR by
+# triggering the workflow manually with workflow_dispatch.
+#
+# Required repository secrets for email delivery:
+#   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, EMAIL_FROM, EMAIL_TO
+# Optional:
+#   PSI_KEY — Google PageSpeed Insights API key
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target URL"
+        required: true
+        default: "https://example.com"
+      competitors:
+        description: "Comma-separated competitor URLs"
+        required: false
+        default: ""
+      emails:
+        description: "Comma-separated recipients"
+        required: false
+        default: ""
+
+env:
+  TARGET_URL:    "https://example.com"
+  COMPETITORS:   "competitor-one.com,competitor-two.com,competitor-three.com,competitor-four.com,competitor-five.com"
+  RECIPIENTS:    ""
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install runner deps
+        run: npm install --silent jsdom node-fetch@2 nodemailer
+
+      - name: Run audit
+        id: audit
+        env:
+          PSI_KEY: ${{ secrets.PSI_KEY }}
+          TARGET:  ${{ github.event.inputs.target || env.TARGET_URL }}
+          COMPS:   ${{ github.event.inputs.competitors || env.COMPETITORS }}
+        run: node scripts/run-audit.js > report.txt
+
+      - name: Email report
+        if: ${{ secrets.SMTP_HOST != '' }}
+        env:
+          SMTP_HOST:  ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:  ${{ secrets.SMTP_PORT }}
+          SMTP_USER:  ${{ secrets.SMTP_USER }}
+          SMTP_PASS:  ${{ secrets.SMTP_PASS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO:   ${{ github.event.inputs.emails || secrets.EMAIL_TO }}
+        run: node scripts/send-email.js
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: serpscope-report-${{ github.run_number }}
+          path: |
+            report.txt
+            report.json
+          retention-days: 90
