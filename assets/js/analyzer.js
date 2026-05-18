@@ -521,29 +521,23 @@
     return { score: pct((total / max) * 100), details, raw: total, max };
   }
 
-  // ── PSI ─────────────────────────────────────────────────────
-  async function fetchPSI(url, apiKey) {
-    try {
-      const base = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
-      const params = new URLSearchParams();
-      params.set('url', url);
-      params.set('strategy', 'mobile');
-      params.append('category', 'performance');
-      params.append('category', 'seo');
-      if (apiKey) params.set('key', apiKey);
-      const r = await fetchWithTimeout(`${base}?${params}`, {}, 30000);
-      if (!r.ok) return null;
-      const j = await r.json();
-      const cat = j.lighthouseResult?.categories || {};
-      return {
-        performance: Math.round((cat.performance?.score || 0) * 100),
-        seo: Math.round((cat.seo?.score || 0) * 100),
-        lcp: j.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue,
-        cls: j.lighthouseResult?.audits?.['cumulative-layout-shift']?.displayValue,
-        fcp: j.lighthouseResult?.audits?.['first-contentful-paint']?.displayValue,
-        tbt: j.lighthouseResult?.audits?.['total-blocking-time']?.displayValue,
-      };
-    } catch { return null; }
+  // ── PSI (lightweight summary derived from full Lighthouse) ──
+  // The heavy lifting now lives in lighthouse.js; this just keeps
+  // backward compatibility with the original `perf` object shape.
+  function summarizePsi(lhBundle) {
+    if (!lhBundle) return null;
+    const m = lhBundle.mobile || lhBundle.desktop;
+    if (!m) return null;
+    return {
+      performance: m.scores.performance,
+      seo: m.scores.seo,
+      lcp: m.metrics.lcp?.displayValue,
+      cls: m.metrics.cls?.displayValue,
+      fcp: m.metrics.fcp?.displayValue,
+      tbt: m.metrics.tbt?.displayValue,
+      inp: m.metrics.inp?.displayValue,
+      ttfb: m.metrics.ttfb?.displayValue,
+    };
   }
 
   // ── Master audit ────────────────────────────────────────────
@@ -569,11 +563,19 @@
       if (smProbe.ok && /<urlset|<sitemapindex/i.test(smProbe.text || '')) sitemapFound = true;
     }
 
-    // PSI
-    let perf = null;
-    if (usePsi) {
-      onProgress({ phase: 'psi', msg: 'Querying PageSpeed Insights' });
-      perf = await fetchPSI(url, psiKey);
+    // Lighthouse (full mobile + desktop via PSI)
+    let lighthouse = null, perf = null;
+    if (usePsi && global.SERPSCOPE?.lighthouse) {
+      onProgress({ phase: 'psi', msg: 'Running Lighthouse (mobile + desktop) via PSI…' });
+      try {
+        lighthouse = await global.SERPSCOPE.lighthouse.runLighthouse(url, {
+          apiKey: psiKey,
+          onProgress: (p) => onProgress({ phase: 'psi', msg: '   ' + (p.msg || '') }),
+        });
+        perf = summarizePsi(lighthouse);
+      } catch (e) {
+        onProgress({ phase: 'psi', msg: '   PSI failed: ' + e.message });
+      }
     }
 
     // Score
@@ -582,6 +584,12 @@
     const technical = scoreTechnical(signals, perf);
     const content = scoreContent(signals);
     const offpage = scoreOffPage(signals, { robotsTxt: robotsProbe.ok, sitemap: sitemapFound });
+
+    // Detailed blockers from Lighthouse + heuristics
+    let blockers = [];
+    if (global.SERPSCOPE?.blockers) {
+      blockers = global.SERPSCOPE.blockers.enumerate(lighthouse, signals);
+    }
 
     const composite = pct(
       onpage.score * WEIGHTS.onpage +
@@ -596,6 +604,8 @@
       timestamp: Date.now(),
       signals,
       perf,
+      lighthouse,
+      blockers,
       extras: { robotsTxt: robotsProbe.ok, sitemap: sitemapFound },
       categories: { onpage, technical, content, offpage },
       composite,
