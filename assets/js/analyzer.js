@@ -9,20 +9,32 @@
   'use strict';
 
   // ── CORS proxies ────────────────────────────────────────────
+  // Each proxy is tried in order. We accept that any one of them
+  // can rate-limit, time out, or refuse a given upstream — so the
+  // fetch layer below transparently retries the next proxy until
+  // we get a usable response.
   const PROXIES = {
     allorigins: {
+      label: 'allorigins.win',
       build: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
       headers: {},
     },
     corsproxy: {
+      label: 'corsproxy.io',
       build: (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
       headers: {},
     },
     codetabs: {
+      label: 'codetabs.com',
       build: (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
       headers: {},
     },
   };
+
+  // Default fallback order; the user's selected proxy is moved to
+  // the front of this list at fetch time. (Direct fetch is intentionally
+  // omitted — it almost always trips CORS and spams the console.)
+  const PROXY_CHAIN = ['allorigins', 'corsproxy', 'codetabs'];
 
   // ── Scoring weights ─────────────────────────────────────────
   const WEIGHTS = { onpage: 0.30, technical: 0.30, content: 0.25, offpage: 0.15 };
@@ -43,7 +55,7 @@
   function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
   function pct(n) { return Math.round(clamp(n, 0, 100)); }
 
-  async function fetchWithTimeout(url, opts = {}, ms = 25000) {
+  async function fetchWithTimeout(url, opts = {}, ms = 20000) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
     try {
@@ -53,25 +65,109 @@
     } catch (e) { clearTimeout(t); throw e; }
   }
 
-  async function fetchPage(url, proxyKey = 'allorigins') {
-    const proxy = PROXIES[proxyKey] || PROXIES.allorigins;
-    const proxied = proxy.build(url);
-    const started = performance.now();
-    const r = await fetchWithTimeout(proxied, { headers: proxy.headers }, 25000);
-    const elapsed = performance.now() - started;
-    if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${url}`);
-    const html = await r.text();
-    return { html, ms: elapsed, finalUrl: url, status: r.status };
+  function orderedChain(preferred) {
+    // Move the user-preferred proxy to the front and keep the rest
+    // as fallbacks. `direct` is always last because it usually 404s
+    // on CORS, but it's worth a shot for the few sites that allow it.
+    const rest = PROXY_CHAIN.filter((k) => k !== preferred);
+    return preferred && PROXIES[preferred] ? [preferred, ...rest] : PROXY_CHAIN.slice();
+  }
+
+  // Classify why a fetch failed. We retry on transient errors
+  // (timeout, 408, 425, 429, 5xx, network) but not on hard 4xx that
+  // would just repeat (401, 403, 404).
+  function isTransient(status, errMsg) {
+    if (status === 408 || status === 425 || status === 429) return true;
+    if (status >= 500 && status <= 599) return true;
+    if (status === 0 || status == null) return true; // network / aborted
+    if (errMsg && /abort|timeout|network|fetch|load failed|cors|tls/i.test(errMsg)) return true;
+    return false;
+  }
+
+  // Try the proxies in `chain` until one returns a 2xx with a body
+  // ≥ minBytes. If only smaller bodies come back, return the largest.
+  async function fetchThroughChain(url, chain, opts = {}) {
+    const onTry = opts.onTry || (() => {});
+    const timeoutMs = opts.timeoutMs || 18000;
+    const minBytes = opts.minBytes ?? 100;
+    const attempts = [];
+    let best = null; // best 2xx response seen so far, by bytes
+
+    for (let i = 0; i < chain.length; i++) {
+      const key = chain[i];
+      const proxy = PROXIES[key];
+      if (!proxy) continue;
+      const proxied = proxy.build(url);
+      const started = performance.now();
+      onTry({ try: i + 1, of: chain.length, proxy: proxy.label, url });
+      try {
+        const r = await fetchWithTimeout(proxied, { headers: proxy.headers }, timeoutMs);
+        const ms = performance.now() - started;
+        if (!r.ok) {
+          attempts.push({ proxy: proxy.label, status: r.status, ms });
+          continue; // try next proxy regardless — different proxies bypass different blockers
+        }
+        let html = '';
+        try { html = await r.text(); } catch (e) {
+          attempts.push({ proxy: proxy.label, status: r.status, ms, error: 'body-read' });
+          continue;
+        }
+        attempts.push({ proxy: proxy.label, status: r.status, ms, ok: true, bytes: html.length });
+        // Remember the largest valid response we've seen.
+        if (!best || html.length > best.html.length) {
+          best = { html, status: r.status, ms, via: proxy.label };
+        }
+        if (html && html.length >= minBytes) {
+          return { ok: true, html, status: r.status, ms, via: proxy.label, attempts };
+        }
+        // body too small — keep trying for a fuller response
+      } catch (e) {
+        const ms = performance.now() - started;
+        const msg = e?.message || String(e);
+        attempts.push({ proxy: proxy.label, status: 0, ms, error: msg });
+        continue;
+      }
+    }
+
+    if (best) {
+      return { ok: true, html: best.html, status: best.status, ms: best.ms, via: best.via, attempts };
+    }
+    return { ok: false, status: 0, ms: 0, via: null, attempts, error: 'all proxies failed' };
+  }
+
+  async function fetchPage(url, proxyKey = 'allorigins', opts = {}) {
+    const chain = orderedChain(proxyKey);
+    const res = await fetchThroughChain(url, chain, {
+      timeoutMs: 18000,
+      minBytes: 100,
+      onTry: opts.onTry,
+    });
+    if (!res.ok) {
+      const detail = res.attempts.map((a) => `${a.proxy}:${a.status || a.error}`).join(' → ');
+      const msg = `All proxies failed for ${url} (${detail})`;
+      const err = new Error(msg);
+      err.attempts = res.attempts;
+      throw err;
+    }
+    return {
+      html: res.html, ms: res.ms, finalUrl: url, status: res.status,
+      via: res.via, attempts: res.attempts,
+    };
   }
 
   async function probeHead(url, proxyKey = 'allorigins') {
-    // Probe a path via the proxy. Returns { ok, status, size? }
-    try {
-      const proxy = PROXIES[proxyKey] || PROXIES.allorigins;
-      const r = await fetchWithTimeout(proxy.build(url), {}, 10000);
-      const text = r.ok ? await r.text() : '';
-      return { ok: r.ok, status: r.status, size: text.length, text };
-    } catch { return { ok: false, status: 0 }; }
+    // Probe a path via the proxy chain. Returns { ok, status, size, text }.
+    // Cap to first 2 proxies — robots.txt / sitemap probes are nice-to-have
+    // and shouldn't blow the audit budget.
+    const chain = orderedChain(proxyKey).slice(0, 2);
+    const res = await fetchThroughChain(url, chain, { timeoutMs: 7000, minBytes: 1 });
+    return {
+      ok: res.ok,
+      status: res.status,
+      size: res.html ? res.html.length : 0,
+      text: res.html || '',
+      via: res.via,
+    };
   }
 
   // ── HTML parsing ────────────────────────────────────────────
@@ -548,8 +644,13 @@
     const onProgress = opts.onProgress || (() => {});
 
     onProgress({ phase: 'fetch', msg: `Fetching ${url}` });
-    const page = await fetchPage(url, proxyKey);
-    onProgress({ phase: 'parse', msg: 'Parsing HTML & extracting signals' });
+    const page = await fetchPage(url, proxyKey, {
+      onTry: ({ try: n, of, proxy }) => {
+        if (n === 1) onProgress({ phase: 'fetch', msg: `   → via ${proxy}` });
+        else onProgress({ phase: 'fetch', msg: `   → falling back to ${proxy} (attempt ${n}/${of})`, level: 'warn' });
+      },
+    });
+    onProgress({ phase: 'parse', msg: `   ✓ fetched ${(page.html.length / 1024).toFixed(1)} KB via ${page.via} in ${(page.ms / 1000).toFixed(2)}s` });
     const signals = extractSignals(page.html, url, page.ms);
 
     // Robots & sitemap probes (best-effort)
@@ -830,5 +931,9 @@
   global.SERPSCOPE.analyzer = {
     auditSite, generateActions, buildAuditItems,
     normalizeUrl, domainOf, gradeOf, WEIGHTS,
+    // Internal — exposed so other modules (competitors.js, scheduler) can
+    // share the resilient multi-proxy fetch chain.
+    _probe: probeHead,
+    _fetchPage: fetchPage,
   };
 })(window);

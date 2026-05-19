@@ -36,45 +36,43 @@
     return NOISE.has(r) || /\.(gov|edu)$/i.test(host);
   }
 
+  // Use the analyzer's resilient fetch chain so DDG searches inherit
+  // the same multi-proxy fallback as the audit fetcher.
   async function searchDDG(query, proxyKey = 'allorigins') {
     const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const proxies = {
-      allorigins: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-      corsproxy: (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-      codetabs: (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
-    };
-    const build = proxies[proxyKey] || proxies.allorigins;
-    try {
-      const r = await fetch(build(url));
-      if (!r.ok) return [];
-      const html = await r.text();
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      const out = [];
-      // DDG html anchors with class "result__a" or "result__url"
-      doc.querySelectorAll('a.result__a, a.result__url, a.result-link').forEach((a) => {
-        let href = a.getAttribute('href') || '';
-        if (href.startsWith('//')) href = 'https:' + href;
-        if (href.includes('uddg=')) {
-          try { href = decodeURIComponent(href.split('uddg=')[1].split('&')[0]); } catch {}
-        }
+    const A = window.SERPSCOPE?.analyzer;
+    let html = '';
+    if (A?._probe) {
+      const res = await A._probe(url, proxyKey);
+      if (!res.ok) return [];
+      html = res.text || '';
+    } else {
+      // Fallback (analyzer.js not loaded yet) — try directly
+      try { const r = await fetch(url); if (!r.ok) return []; html = await r.text(); } catch { return []; }
+    }
+    if (!html) return [];
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const out = [];
+    doc.querySelectorAll('a.result__a, a.result__url, a.result-link').forEach((a) => {
+      let href = a.getAttribute('href') || '';
+      if (href.startsWith('//')) href = 'https:' + href;
+      if (href.includes('uddg=')) {
+        try { href = decodeURIComponent(href.split('uddg=')[1].split('&')[0]); } catch {}
+      }
+      try {
+        const u = new URL(href);
+        out.push(u.hostname.replace(/^www\./, ''));
+      } catch {}
+    });
+    if (out.length === 0) {
+      doc.querySelectorAll('a[href^="http"]').forEach((a) => {
         try {
-          const u = new URL(href);
-          out.push(u.hostname.replace(/^www\./, ''));
+          const u = new URL(a.getAttribute('href'));
+          if (!/duckduckgo|google|bing/i.test(u.hostname)) out.push(u.hostname.replace(/^www\./, ''));
         } catch {}
       });
-      // Fallback: any external anchor
-      if (out.length === 0) {
-        doc.querySelectorAll('a[href^="http"]').forEach((a) => {
-          try {
-            const u = new URL(a.getAttribute('href'));
-            if (!/duckduckgo|google|bing/i.test(u.hostname)) out.push(u.hostname.replace(/^www\./, ''));
-          } catch {}
-        });
-      }
-      return out;
-    } catch {
-      return [];
     }
+    return out;
   }
 
   async function discoverCompetitors(targetUrl, keywords, proxyKey = 'allorigins') {
