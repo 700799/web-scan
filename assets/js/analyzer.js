@@ -692,7 +692,29 @@
       blockers = global.SERPSCOPE.blockers.enumerate(lighthouse, signals);
     }
 
-    const composite = pct(
+    // Off-page authority via Moz Links API (if user provided a token).
+    // We only fetch for the *target* by default — competitors are fetched
+    // in batch from app.js so quota is controlled at the call site.
+    let moz = null;
+    if (opts.fetchMoz !== false && global.SERPSCOPE?.moz?.hasToken?.()) {
+      onProgress({ phase: 'moz', msg: 'Fetching Moz authority data…' });
+      try {
+        moz = await global.SERPSCOPE.moz.lookup(url, { rich: opts.mozRich !== false });
+        if (moz?.da != null) {
+          onProgress({ phase: 'moz', msg: `   ✓ DA ${moz.da} · ${moz.linkingDomains || 0} linking domains` });
+        }
+      } catch (e) {
+        onProgress({ phase: 'moz', msg: `   Moz lookup failed: ${e.message}` });
+      }
+    }
+
+    // If we have real DA, blend it into the off-page score (50/50)
+    // and compute the composite so the headline grade reflects it.
+    if (moz?.da != null) {
+      offpage.score = pct(offpage.score * 0.5 + moz.da * 0.5);
+      offpage.daBoost = true;
+    }
+    const finalComposite = pct(
       onpage.score * WEIGHTS.onpage +
       technical.score * WEIGHTS.technical +
       content.score * WEIGHTS.content +
@@ -707,10 +729,11 @@
       perf,
       lighthouse,
       blockers,
+      moz,
       extras: { robotsTxt: robotsProbe.ok, sitemap: sitemapFound },
       categories: { onpage, technical, content, offpage },
-      composite,
-      grade: gradeOf(composite),
+      composite: finalComposite,
+      grade: gradeOf(finalComposite),
     };
   }
 

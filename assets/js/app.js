@@ -33,6 +33,9 @@
   function loadSettingsIntoUI() {
     const s = getSettings();
     setVal('set-psi-key', s.psiKey);
+    setVal('set-moz-token', s.mozToken);
+    const compsBox = document.getElementById('set-moz-comps');
+    if (compsBox) compsBox.checked = s.mozFetchCompetitors !== false;
     setVal('set-ejs-key', s.ejsKey);
     setVal('set-ejs-service', s.ejsService);
     setVal('set-ejs-tpl', s.ejsTpl);
@@ -44,6 +47,8 @@
   function saveSettingsFromUI() {
     const s = {
       psiKey: val('set-psi-key'),
+      mozToken: val('set-moz-token'),
+      mozFetchCompetitors: document.getElementById('set-moz-comps')?.checked !== false,
       ejsKey: val('set-ejs-key'),
       ejsService: val('set-ejs-service'),
       ejsTpl: val('set-ejs-tpl'),
@@ -92,6 +97,7 @@
     document.getElementById('view-' + name).classList.add('active');
     document.querySelector(`.nav-link[data-view="${name}"]`).classList.add('active');
     if (name === 'schedule') SCH.renderList();
+    if (name === 'history' && SS.history) SS.history.renderHistoryView();
   }
 
   // ── Audit run ───────────────────────────────────────────────
@@ -153,12 +159,24 @@
     }
     const comps = results.slice(1).filter(Boolean);
     const actions = A.generateActions(target);
+    target._actions = actions; // so history snapshot stores action counts
+
+    // Batch Moz for competitors (cached by host, 7-day TTL)
+    if (settings.mozToken && settings.mozFetchCompetitors !== false && SS.moz?.hasToken?.() && comps.length) {
+      progress(96, 'Fetching competitor Domain Authority', 'busy');
+      try {
+        const compMoz = await SS.moz.batchLookup(comps.map((c) => c.url), { rich: false });
+        comps.forEach((c, i) => { if (compMoz[i]) c.moz = compMoz[i]; });
+      } catch (e) {
+        progress(97, '   Moz batch failed: ' + e.message, 'warn');
+      }
+    }
 
     state.target = target;
     state.comps = comps;
     state.actions = actions;
 
-    // Persist last report
+    // Persist last report (legacy localStorage cache for instant resume)
     try {
       localStorage.setItem(REPORT_KEY, JSON.stringify({
         target: stripForStorage(target),
@@ -167,6 +185,11 @@
         ts: Date.now(),
       }));
     } catch {}
+
+    // Persist to IndexedDB history (this is what trends are built from)
+    if (SS.history) {
+      try { await SS.history.saveAudit(target); } catch (e) { console.warn('history save failed', e); }
+    }
 
     progress(100, 'Rendering report', 'done');
     renderReport();
@@ -220,7 +243,31 @@
     R.renderAuditGrid('content-grid', groups.content);
     R.renderAuditGrid('offpage-grid', groups.offpage);
     R.renderActions(actions);
+
+    // Trend sparklines for this host (built from IndexedDB)
+    if (SS.history) {
+      SS.history.renderInlineTrend(target).catch(() => {});
+    }
+
+    // Moz backlink authority panel (hidden if no token / no data)
+    if (SS.moz) {
+      const compsMoz = comps.map((c) => c.moz).filter(Boolean);
+      SS.moz.renderPanel(target.moz, compsMoz);
+    }
+
     document.getElementById('report').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Load a historical audit snapshot into the dashboard view.
+  function loadAudit(audit) {
+    if (!audit) return;
+    state.target = audit;
+    state.comps = audit._comps || [];
+    state.actions = A.generateActions(audit);
+    switchView('dashboard');
+    renderReport();
+    document.getElementById('report').hidden = false;
+    document.getElementById('progress-panel').hidden = true;
   }
 
   function loadLastReport() {
@@ -485,7 +532,7 @@
 
   // expose
   global.SERPSCOPE = global.SERPSCOPE || {};
-  global.SERPSCOPE.app = { getSettings, toast };
+  global.SERPSCOPE.app = { getSettings, toast, loadAudit };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
