@@ -1137,3 +1137,171 @@ textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
   .blocker-summary { grid-template-columns: repeat(2, 1fr); }
   .blocker-filters { flex-direction: column; gap: 10px; }
 }
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║  History · Trends · Moz Authority                          ║
+   ╚══════════════════════════════════════════════════════════╝ */
+
+/* ── Trend card on dashboard ──────────────────────────────── */
+.trend-panel {
+  padding: 18px 22px;
+}
+.trend-grid {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 24px;
+  align-items: center;
+}
+.trend-empty { display: flex; flex-direction: column; gap: 4px; padding: 6px 2px; }
+.trend-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-mute);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.trend-main .trend-spark svg { display: block; }
+.trend-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 13px;
+}
+.trend-cats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 18px;
+}
+.trend-row {
+  display: grid;
+  grid-template-columns: 70px 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+.trend-row-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.trend-row-spark svg { display: block; }
+.trend-row-vals { display: flex; gap: 6px; align-items: baseline; font-family: var(--mono); font-size: 12px; }
+.trend-row-now { color: var(--text); font-weight: 600; }
+.trend-row-delta.up { color: var(--accent); }
+.trend-row-delta.down { color: var(--danger); }
+.trend-row-delta.flat { color: var(--text-mute); }
+
+.trend-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+  background: var(--bg-3);
+  color: var(--text-dim);
+}
+.trend-badge.up { background: rgba(0, 212, 170, 0.15); color: var(--accent); }
+.trend-badge.down { background: rgba(255, 91, 107, 0.15); color: var(--danger); }
+.trend-badge.flat { color: var(--text-mute); }
+.trend-badge.new { background: rgba(106, 161, 255, 0.15); color: var(--info); }
+
+/* ── History view ─────────────────────────────────────────── */
+.history-table tr.clickable { cursor: pointer; }
+.history-table tr.clickable:hover td { background: var(--bg-2); }
+.spark { vertical-align: middle; }
+
+.history-detail-table { margin-top: 16px; }
+
+/* ── Moz panel ───────────────────────────────────────────── */
+.moz-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 22px;
+  margin-bottom: 18px;
+}
+.moz-grid + .moz-grid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.moz-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--rad-lg);
+  padding: 22px;
+}
+.moz-card.error { padding: 16px; }
+.moz-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.moz-card-head h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.moz-cached {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(106, 161, 255, 0.15);
+  color: var(--info);
+  letter-spacing: 0.04em;
+}
+.moz-da {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 56px;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  margin: 4px 0 2px;
+}
+.moz-da-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+.moz-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.moz-stats > div { display: flex; flex-direction: column; }
+.moz-stats span {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+}
+.moz-stats span.bad { color: var(--danger); }
+.moz-stats label {
+  font-size: 10.5px;
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+.moz-table .num, .moz-anchors-table .num, .moz-domains-table .num { font-family: var(--mono); }
+.moz-disclaimer { margin-top: 6px; text-align: right; }
+
+#moz-panel h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+  .trend-grid { grid-template-columns: 1fr; }
+  .trend-cats { grid-template-columns: 1fr; }
+  .moz-grid { grid-template-columns: 1fr; }
+  .moz-grid + .moz-grid { grid-template-columns: 1fr; }
+}

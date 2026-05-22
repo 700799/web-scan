@@ -31,6 +31,7 @@
   </div>
   <nav class="topnav">
     <button class="nav-link active" data-view="dashboard">Dashboard</button>
+    <button class="nav-link" data-view="history">History</button>
     <button class="nav-link" data-view="schedule">Schedule</button>
     <button class="nav-link" data-view="settings">Settings</button>
     <button class="nav-link" data-view="about">About</button>
@@ -202,6 +203,9 @@
       </div>
     </div>
 
+    <!-- Trend card (populated when this host has prior audits) -->
+    <div class="panel trend-panel" id="trend-card"></div>
+
     <!-- Report actions toolbar -->
     <div class="report-toolbar">
       <button class="btn small" id="btn-export-json">
@@ -346,6 +350,15 @@
       <div class="audit-grid" id="offpage-grid"></div>
     </div>
 
+    <!-- Backlink authority via Moz Links API (hidden unless data available) -->
+    <div class="panel" id="moz-panel-wrap" hidden>
+      <div class="panel-head">
+        <h3>Backlink Authority · Moz</h3>
+        <span class="muted small">Domain Authority, Page Authority, linking root domains, top anchors</span>
+      </div>
+      <div id="moz-panel"></div>
+    </div>
+
     <!-- Action plan -->
     <div class="panel actions-panel">
       <div class="panel-head"><h3>Prioritized Action Plan</h3>
@@ -368,6 +381,11 @@
     </div>
 
   </div>
+</section>
+
+<!-- ╔══════════════════════ HISTORY ═════════════════════╗ -->
+<section class="view" id="view-history">
+  <!-- Populated by history.js when activated -->
 </section>
 
 <!-- ╔══════════════════════ SCHEDULE ═════════════════════╗ -->
@@ -458,6 +476,18 @@
       <div class="field span-2">
         <label>API key</label>
         <input id="set-psi-key" type="text" placeholder="AIza..." />
+      </div>
+    </div>
+
+    <h3>Moz Links API · Domain Authority</h3>
+    <p class="muted">Real off-page authority data: DA, PA, linking root domains, anchor text. Paste your <a href="https://moz.com/products/api" target="_blank" rel="noopener">Moz API token</a>. Responses are cached locally for 7 days to conserve quota.</p>
+    <div class="form-grid">
+      <div class="field span-2">
+        <label>Moz API token</label>
+        <input id="set-moz-token" type="text" placeholder="moz_xxxxxxxxxxxxx" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label class="check"><input type="checkbox" id="set-moz-comps" checked /> Fetch DA for competitors too</label>
       </div>
     </div>
 
@@ -554,6 +584,8 @@
 <script src="assets/js/lighthouse.js"></script>
 <script src="assets/js/blockers.js"></script>
 <script src="assets/js/competitors.js"></script>
+<script src="assets/js/moz.js"></script>
+<script src="assets/js/history.js"></script>
 <script src="assets/js/renderer.js"></script>
 <script src="assets/js/perf-renderer.js"></script>
 <script src="assets/js/email.js"></script>
