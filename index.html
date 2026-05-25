@@ -350,6 +350,30 @@
       <div class="audit-grid" id="offpage-grid"></div>
     </div>
 
+    <!-- Site architecture crawl (on-demand multi-page audit) -->
+    <div class="panel crawl-panel">
+      <div class="panel-head">
+        <div>
+          <h3>Site Architecture Crawl</h3>
+          <span class="muted small">Crawl internal pages to surface broken links, duplicate &amp; missing titles/meta, thin content, and orphan pages</span>
+        </div>
+        <div class="crawl-controls">
+          <select id="crawl-depth" class="crawl-depth-select" title="Maximum pages to crawl">
+            <option value="10">10 pages</option>
+            <option value="25" selected>25 pages</option>
+            <option value="50">50 pages</option>
+            <option value="100">100 pages</option>
+          </select>
+          <button class="btn small primary" id="btn-crawl" type="button">
+            <svg viewBox="0 0 24 24" width="14" height="14"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none"/><path d="M20 20l-3-3M11 8v6M8 11h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Start crawl
+          </button>
+        </div>
+      </div>
+      <div class="crawl-progress" id="crawl-progress" hidden></div>
+      <div id="crawl-results"></div>
+    </div>
+
     <!-- Backlink authority via Moz Links API (hidden unless data available) -->
     <div class="panel" id="moz-panel-wrap" hidden>
       <div class="panel-head">
@@ -584,6 +608,7 @@
 <script src="assets/js/lighthouse.js"></script>
 <script src="assets/js/blockers.js"></script>
 <script src="assets/js/competitors.js"></script>
+<script src="assets/js/crawler.js"></script>
 <script src="assets/js/moz.js"></script>
 <script src="assets/js/history.js"></script>
 <script src="assets/js/renderer.js"></script>

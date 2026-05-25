@@ -210,6 +210,14 @@
 
   function renderReport() {
     const { target, comps, actions } = state;
+
+    // Reset the on-demand site crawl for the new report.
+    state.crawl = null;
+    const crawlResults = document.getElementById('crawl-results');
+    if (crawlResults) crawlResults.innerHTML = '';
+    const crawlProg = document.getElementById('crawl-progress');
+    if (crawlProg) { crawlProg.hidden = true; crawlProg.textContent = ''; }
+
     const rank = R.rankOf(target, comps);
     R.renderHero(target, rank, actions);
     R.renderScorecards(target);
@@ -311,6 +319,52 @@
     }
   }
 
+  // ── Site architecture crawl (on-demand) ────────────────────
+  let crawlRunning = false;
+  async function runCrawl() {
+    if (crawlRunning) return;
+    if (!SS.crawler) { toast('Crawler unavailable', 'err'); return; }
+    const url = state.target?.url || A.normalizeUrl(val('target-url'));
+    if (!url) { toast('Run an audit (or enter a URL) first', 'err'); return; }
+
+    const maxPages = parseInt(document.getElementById('crawl-depth')?.value || '25', 10);
+    const proxyKey = document.getElementById('cors-proxy').value;
+    const btn = document.getElementById('btn-crawl');
+    const prog = document.getElementById('crawl-progress');
+
+    crawlRunning = true;
+    btn.disabled = true;
+    const btnHtml = btn.innerHTML;
+    btn.textContent = 'Crawling…';
+    prog.hidden = false;
+    prog.textContent = 'Starting crawl…';
+    setStatus('busy', 'Crawling site');
+
+    try {
+      const result = await SS.crawler.crawl(url, { maxPages, proxy: proxyKey }, (p) => {
+        if (p.phase === 'sitemap') prog.textContent = 'Reading sitemap…';
+        else if (p.phase === 'crawl') prog.textContent = `Crawled ${p.done}/${p.total} · ${crawlLabel(p.url)}`;
+        else if (p.phase === 'done') prog.textContent = `Finished · ${p.done} pages`;
+      });
+      state.crawl = result;
+      SS.crawler.render(result, document.getElementById('crawl-results'));
+      prog.hidden = true;
+      toast(`Crawl complete · ${result.stats.crawled} pages · ${result.stats.broken} broken`);
+    } catch (e) {
+      prog.textContent = 'Crawl failed: ' + e.message;
+      toast('Crawl failed: ' + e.message, 'err');
+    } finally {
+      crawlRunning = false;
+      btn.disabled = false;
+      btn.innerHTML = btnHtml;
+      setStatus('', 'Ready');
+    }
+  }
+
+  function crawlLabel(u) {
+    try { const x = new URL(u); return (x.pathname + x.search) || '/'; } catch { return u; }
+  }
+
   // ── Exports ────────────────────────────────────────────────
   function exportJSON() {
     if (!state.target) return;
@@ -318,6 +372,7 @@
       target: state.target,
       competitors: state.comps,
       actions: state.actions,
+      crawl: state.crawl || null,
       generated: new Date().toISOString(),
     };
     downloadBlob(JSON.stringify(data, null, 2), `serpscope-${state.target.host}-${Date.now()}.json`, 'application/json');
@@ -465,6 +520,9 @@
     document.getElementById('btn-clear-comp').addEventListener('click', () => {
       document.querySelectorAll('.competitor-url').forEach((i) => (i.value = ''));
     });
+
+    // Site crawl
+    document.getElementById('btn-crawl')?.addEventListener('click', runCrawl);
 
     // Report toolbar
     document.getElementById('btn-export-json').addEventListener('click', exportJSON);
