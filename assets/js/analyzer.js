@@ -241,17 +241,23 @@
     // Links
     const links = Array.from(doc.querySelectorAll('a[href]'));
     const internal = [], external = [], nofollow = [];
+    const internalSet = new Set(); // deduped, fragment-stripped internal URLs (for crawling)
     links.forEach((a) => {
       const href = a.getAttribute('href');
       if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
       try {
         const abs = new URL(href, url);
-        if (abs.hostname.replace(/^www\./, '') === host) internal.push(abs.href);
-        else external.push(abs.href);
+        if (abs.hostname.replace(/^www\./, '') === host) {
+          internal.push(abs.href);
+          // Normalize for crawl: drop hash, keep query (some sites paginate via ?page=)
+          abs.hash = '';
+          internalSet.add(abs.href);
+        } else external.push(abs.href);
         const rel = (a.getAttribute('rel') || '').toLowerCase();
         if (rel.includes('nofollow')) nofollow.push(abs.href);
       } catch {}
     });
+    const internalLinks = Array.from(internalSet).slice(0, 300);
 
     // Images
     const imgs = Array.from(doc.querySelectorAll('img'));
@@ -430,6 +436,7 @@
       robots, canonical, viewport, charset, lang,
       headings,
       links: { internal: internal.length, external: external.length, nofollow: nofollow.length, total: internal.length + external.length },
+      internalLinks,
       images: { total: imgs.length, withAlt: imgsWithAlt.length, emptyAlt: imgsWithEmptyAlt.length, lazy: imgsLazy.length, modern: imgsModern.length, dimensioned: imgsDimensioned.length },
       bodyText: bodyText.slice(0, 1500),
       wordCount, sentenceCount, flesch,
@@ -812,15 +819,19 @@
     onProgress({ phase: 'parse', msg: `   ✓ fetched ${(page.html.length / 1024).toFixed(1)} KB via ${page.via} in ${(page.ms / 1000).toFixed(2)}s` });
     const signals = extractSignals(page.html, url, page.ms);
 
-    // Robots & sitemap probes (best-effort)
-    onProgress({ phase: 'probe', msg: 'Probing robots.txt & sitemap' });
-    const origin = new URL(url).origin;
-    const robotsProbe = await probeHead(origin + '/robots.txt', proxyKey).catch(() => ({ ok: false }));
-    let sitemapFound = false;
-    if (robotsProbe.ok && /sitemap:/i.test(robotsProbe.text || '')) sitemapFound = true;
-    if (!sitemapFound) {
-      const smProbe = await probeHead(origin + '/sitemap.xml', proxyKey).catch(() => ({ ok: false }));
-      if (smProbe.ok && /<urlset|<sitemapindex/i.test(smProbe.text || '')) sitemapFound = true;
+    // Robots & sitemap probes (best-effort). Skipped for crawl sub-pages
+    // (probeRobots:false) since they share the origin's robots/sitemap and
+    // we don't want to spend proxy budget re-probing it for every page.
+    let robotsProbe = { ok: false }, sitemapFound = false;
+    if (opts.probeRobots !== false) {
+      onProgress({ phase: 'probe', msg: 'Probing robots.txt & sitemap' });
+      const origin = new URL(url).origin;
+      robotsProbe = await probeHead(origin + '/robots.txt', proxyKey).catch(() => ({ ok: false }));
+      if (robotsProbe.ok && /sitemap:/i.test(robotsProbe.text || '')) sitemapFound = true;
+      if (!sitemapFound) {
+        const smProbe = await probeHead(origin + '/sitemap.xml', proxyKey).catch(() => ({ ok: false }));
+        if (smProbe.ok && /<urlset|<sitemapindex/i.test(smProbe.text || '')) sitemapFound = true;
+      }
     }
 
     // Lighthouse (full mobile + desktop via PSI)

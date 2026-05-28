@@ -11,6 +11,7 @@
   const A = SS.analyzer;
   const R = SS.renderer;
   const C = SS.competitors;
+  const CR = SS.crawler;
   const E = SS.email;
   const SCH = SS.scheduler;
 
@@ -21,6 +22,7 @@
     target: null,
     comps: [],
     actions: [],
+    site: null,
     running: false,
   };
 
@@ -115,6 +117,8 @@
     const proxyKey = document.getElementById('cors-proxy').value;
     const perfSource = document.getElementById('perf-source').value;
     const useFinalPsi = perfSource === 'psi';
+    const auditDepth = document.getElementById('audit-depth').value;
+    const crawlMax = parseInt(document.getElementById('crawl-max').value, 10) || 75;
 
     state.running = true;
     document.getElementById('run-audit').disabled = true;
@@ -175,6 +179,30 @@
     state.target = target;
     state.comps = comps;
     state.actions = actions;
+    state.site = null;
+
+    // Full-site crawl: discover every page (sitemap-first, then internal
+    // links) and audit each so the analysis covers the whole property.
+    if (auditDepth === 'deep' && CR) {
+      progress(92, `Crawling site (up to ${crawlMax} pages)…`, 'busy');
+      try {
+        const crawl = await CR.crawlSite(target.url, {
+          proxy: proxyKey,
+          maxPages: crawlMax,
+          seedAudit: target, // reuse the homepage audit we already ran
+          onProgress: ({ msg, level }) => progress(96, msg, level || 'busy'),
+        });
+        const site = CR.analyzeSiteWide(crawl);
+        const siteActions = CR.generateSiteActions(site);
+        state.site = {
+          site, actions: siteActions,
+          meta: { startUrl: crawl.startUrl, sitemapCount: crawl.sitemapCount, discovered: crawl.discovered },
+        };
+        progress(99, `   ✓ crawled ${site.pageCount} page(s) · avg score ${site.avgComposite} · ${siteActions.length} site-wide actions`, 'done');
+      } catch (e) {
+        progress(99, '   site crawl failed: ' + e.message, 'warn');
+      }
+    }
 
     // Persist last report (legacy localStorage cache for instant resume)
     try {
@@ -245,6 +273,10 @@
     R.renderAuditGrid('a11y-grid', groups.a11y);
     R.renderActions(actions);
 
+    // Whole-site crawl (only present after a full-site audit)
+    if (state.site && R.renderSiteCrawl) R.renderSiteCrawl(state.site.site, state.site.actions, state.site.meta);
+    else if (R.hideSiteCrawl) R.hideSiteCrawl();
+
     // Trend sparklines for this host (built from IndexedDB)
     if (SS.history) {
       SS.history.renderInlineTrend(target).catch(() => {});
@@ -265,6 +297,7 @@
     state.target = audit;
     state.comps = audit._comps || [];
     state.actions = A.generateActions(audit);
+    state.site = null; // historical snapshots don't carry crawl data
     switchView('dashboard');
     renderReport();
     document.getElementById('report').hidden = false;

@@ -19,6 +19,7 @@ https://<your-user>.github.io/web-scan/
 - **Content analysis** — word count, Flesch reading ease, keyword diversity, top-keyword density, heading rhythm, multimedia richness, freshness markers.
 - **Off-Page signals** — social presence, TLD trust, robots.txt + sitemap, brand entity declarations, E-E-A-T proxies, citation health.
 - **Accessibility & best practices** — form-field labels, button names, heading-order integrity, skip links, ARIA usage, descriptive anchor text, `target="_blank"` safety, Content Security Policy, Subresource Integrity, resource hints (preconnect/preload), CLS-safe image dimensions, and PWA chrome (manifest, Apple touch icon, theme color).
+- **Whole-site crawl** — set *Audit Depth* to *Full site crawl* to discover and audit every page (sitemap-first, then internal-link BFS, respecting `robots.txt` disallow rules, up to a configurable page cap). Aggregates cross-page issues a single-page scan can't see: duplicate titles / descriptions / H1s, thin pages, missing meta, `noindex` leaks, missing canonicals, and potential orphan pages — plus a site-wide action plan and a weakest-first page table.
 - **Competitive benchmark** — your site + 5 competitors on a radar / bar / matrix chart with a ranked comparison table.
 - **Prioritized action plan** — P0–P3, quick-win filter, impact + effort estimates, step-by-step fixes.
 - **Email reports** — via EmailJS (browser) or SMTP (GitHub Actions).
@@ -49,6 +50,7 @@ index.html                              — single-page app shell
 assets/css/styles.css                   — professional dark dashboard styling
 assets/js/analyzer.js                   — SEO signal extraction + scoring engine
 assets/js/competitors.js                — competitor auto-discovery (DuckDuckGo)
+assets/js/crawler.js                     — whole-site crawl (sitemap + internal links) + site-wide aggregation
 assets/js/renderer.js                   — charts, scorecards, tables
 assets/js/email.js                      — EmailJS dispatch
 assets/js/scheduler.js                  — browser-side scheduling
@@ -93,6 +95,7 @@ If one is rate-limited or down, switch to another.
 - True backlink graphs require a commercial API (Ahrefs / Majestic / Moz). SERPSCOPE estimates off-page health using public signals — solid for relative comparison and trend tracking, not for absolute domain rating.
 - PSI is rate-limited without an API key (25k/day public quota across all IPs).
 - Some sites block proxied fetches via referrer checks or Cloudflare challenges.
+- Whole-site crawl runs client-side through the free CORS proxies (one fetch per page), so it's capped (default 75 pages, max 200) to stay within their rate limits. For exhaustive crawls of large sites, run with a PageSpeed/own proxy and raise the cap, or schedule server-side audits via GitHub Actions. Orphan detection is relative to the pages actually crawled.
 
 ## License
 

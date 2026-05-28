@@ -298,6 +298,135 @@
     });
   }
 
+  // ── Site crawl report ──────────────────────────────────────
+  function shortUrl(u) {
+    try { const x = new URL(u); return (x.pathname + x.search) || '/'; } catch { return u; }
+  }
+
+  function urlList(urls, cap = 25) {
+    if (!urls || !urls.length) return '';
+    const shown = urls.slice(0, cap).map((u) => `<li><a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(shortUrl(u))}</a></li>`).join('');
+    const more = urls.length > cap ? `<li class="muted">+${urls.length - cap} more</li>` : '';
+    return `<ul class="crawl-url-list">${shown}${more}</ul>`;
+  }
+
+  function issueBlock(title, body, count, tone = 'warn') {
+    if (!count) return '';
+    return `<details class="crawl-issue ${tone}">
+      <summary><span class="crawl-issue-count ${tone}">${count}</span> ${escapeHtml(title)}</summary>
+      <div class="crawl-issue-body">${body}</div>
+    </details>`;
+  }
+
+  function actionCardHtml(a) {
+    return `<div class="action-card" data-priority="${a.priority}">
+      <div class="action-priority">
+        <span class="pill ${a.priority.toLowerCase()}">${a.priority}</span>
+        <div class="action-impact-label">Impact</div>
+        <div class="action-impact-val">${a.impact}</div>
+      </div>
+      <div class="action-body">
+        <h4>${escapeHtml(a.title)}</h4>
+        <p><b>Problem.</b> ${escapeHtml(a.problem)}</p>
+        <p><b>Recommendation.</b> ${escapeHtml(a.fix)}</p>
+        ${a.steps && a.steps.length ? `<ol class="action-steps">${a.steps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>` : ''}
+        <div class="action-tags">
+          <span class="action-tag">${escapeHtml(a.category)}</span>
+          ${a.quickwin ? '<span class="action-tag" style="color:#00d4aa">quick-win</span>' : ''}
+        </div>
+      </div>
+      <div class="action-meta"><span class="action-effort">⏱ ${escapeHtml(a.effort)}</span></div>
+    </div>`;
+  }
+
+  function renderSiteCrawl(site, actions, meta) {
+    const wrap = document.getElementById('site-crawl-wrap');
+    if (!wrap) return;
+    wrap.hidden = false;
+
+    const tile = (label, value, tone) =>
+      `<div class="crawl-stat ${tone || ''}"><div class="crawl-stat-val">${value}</div><div class="crawl-stat-label">${escapeHtml(label)}</div></div>`;
+
+    const dupCount = site.duplicateTitles.reduce((s, d) => s + d.urls.length, 0);
+    const summary = document.getElementById('site-crawl-summary');
+    summary.innerHTML = [
+      tile('Pages crawled', site.pageCount, 'good'),
+      tile('Avg page score', site.avgComposite, site.avgComposite >= 65 ? 'good' : 'warn'),
+      tile('In sitemap', meta.sitemapCount, ''),
+      tile('Dup. titles', dupCount, dupCount ? 'bad' : 'good'),
+      tile('Thin pages', site.thinPages.length, site.thinPages.length ? 'warn' : 'good'),
+      tile('Orphan pages', site.orphans.length, site.orphans.length ? 'warn' : 'good'),
+      tile('noindex', site.noindexPages.length, site.noindexPages.length ? 'warn' : 'good'),
+      tile('Failed', site.failed.length, site.failed.length ? 'bad' : 'good'),
+    ].join('');
+
+    // Issue accordions
+    const issues = [
+      issueBlock('Duplicate title tags',
+        site.duplicateTitles.map((d) => `<div class="crawl-dup"><div class="crawl-dup-val">“${escapeHtml(d.value)}” <span class="muted">×${d.urls.length}</span></div>${urlList(d.urls)}</div>`).join(''),
+        site.duplicateTitles.length, 'bad'),
+      issueBlock('Duplicate meta descriptions',
+        site.duplicateDescriptions.map((d) => `<div class="crawl-dup"><div class="crawl-dup-val">“${escapeHtml(d.value.slice(0, 120))}…” <span class="muted">×${d.urls.length}</span></div>${urlList(d.urls)}</div>`).join(''),
+        site.duplicateDescriptions.length, 'warn'),
+      issueBlock('Duplicate H1 headings',
+        site.duplicateH1s.map((d) => `<div class="crawl-dup"><div class="crawl-dup-val">“${escapeHtml(d.value)}” <span class="muted">×${d.urls.length}</span></div>${urlList(d.urls)}</div>`).join(''),
+        site.duplicateH1s.length, 'warn'),
+      issueBlock('Thin pages (< 300 words)',
+        `<ul class="crawl-url-list">${site.thinPages.slice(0, 40).map((p) => `<li><a href="${escapeHtml(p.url)}" target="_blank" rel="noopener">${escapeHtml(shortUrl(p.url))}</a> <span class="muted">${p.words} words</span></li>`).join('')}</ul>`,
+        site.thinPages.length, 'warn'),
+      issueBlock('Pages missing a title', urlList(site.missingTitle), site.missingTitle.length, 'bad'),
+      issueBlock('Pages missing a meta description', urlList(site.missingDesc), site.missingDesc.length, 'warn'),
+      issueBlock('Pages missing an H1', urlList(site.missingH1), site.missingH1.length, 'warn'),
+      issueBlock('Pages missing a canonical tag', urlList(site.missingCanonical), site.missingCanonical.length, 'warn'),
+      issueBlock('noindex pages', urlList(site.noindexPages), site.noindexPages.length, 'warn'),
+      issueBlock('Potential orphan pages (in sitemap, not internally linked)', urlList(site.orphans), site.orphans.length, 'warn'),
+      issueBlock('Pages served over HTTP', urlList(site.httpPages), site.httpPages.length, 'bad'),
+      issueBlock('Pages that failed to fetch',
+        `<ul class="crawl-url-list">${site.failed.map((f) => `<li>${escapeHtml(shortUrl(f.url))} <span class="muted">${escapeHtml(f.error || '')}</span></li>`).join('')}</ul>`,
+        site.failed.length, 'bad'),
+    ].join('');
+
+    // Per-page table (worst first)
+    const rows = site.pages.slice()
+      .sort((a, b) => (a.composite || 0) - (b.composite || 0))
+      .map((p) => {
+        const s = p.signals || {};
+        const flags = [];
+        if (!s.title) flags.push('no title');
+        if (!s.metaDesc) flags.push('no desc');
+        if (!(s.headings && s.headings.h1.length)) flags.push('no H1');
+        if ((s.wordCount || 0) < 300) flags.push('thin');
+        if (/noindex/i.test(s.robots || '')) flags.push('noindex');
+        if (!s.canonical) flags.push('no canonical');
+        return `<tr>
+          <td class="domain"><a href="${escapeHtml(p.url)}" target="_blank" rel="noopener">${escapeHtml(shortUrl(p.url))}</a></td>
+          <td class="score-cell">${p.composite} <span style="color:${gradeColor(p.grade)}">${p.grade}</span></td>
+          <td>${s.wordCount || 0}</td>
+          <td>${(s.title || '').length}</td>
+          <td>${flags.length ? flags.map((f) => `<span class="crawl-flag">${escapeHtml(f)}</span>`).join(' ') : '<span class="muted">clean</span>'}</td>
+        </tr>`;
+      }).join('');
+
+    const cappedNote = site.capped ? ` · crawl hit the page cap — raise “Max pages” to go deeper` : '';
+    const body = document.getElementById('site-crawl-body');
+    body.innerHTML = `
+      <div class="crawl-meta muted small">Entry: ${escapeHtml(meta.startUrl)} · ${site.pageCount} audited · ${meta.discovered} discovered · robots.txt ${site.robotsOk ? 'found' : 'not found'}${cappedNote}</div>
+      <div class="crawl-issues">${issues || '<p class="muted">No site-wide issues detected across crawled pages. 🎉</p>'}</div>
+      ${actions && actions.length ? `<h4 class="crawl-subhead">Site-wide action plan</h4><div class="actions-list">${actions.map(actionCardHtml).join('')}</div>` : ''}
+      <h4 class="crawl-subhead">All crawled pages <span class="muted small">(weakest first)</span></h4>
+      <div class="rank-table-wrap">
+        <table class="rank-table">
+          <thead><tr><th>Page</th><th>Score</th><th>Words</th><th>Title ch</th><th>Issues</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  function hideSiteCrawl() {
+    const wrap = document.getElementById('site-crawl-wrap');
+    if (wrap) wrap.hidden = true;
+  }
+
   // ── Last-run metadata ──────────────────────────────────────
   function renderLastRunMeta(audit) {
     document.getElementById('last-run-meta').textContent =
@@ -312,6 +441,7 @@
   global.SERPSCOPE.renderer = {
     renderHero, renderScorecards, renderCompetitorChart, renderRankTable,
     rankOf, renderAuditGrid, renderActions, applyActionFilter,
+    renderSiteCrawl, hideSiteCrawl,
     renderLastRunMeta, escapeHtml,
   };
 })(window);

@@ -55,7 +55,7 @@
         <p class="muted">Run a comprehensive on-page &amp; off-page SEO analysis with competitive benchmarking.</p>
       </div>
       <div class="panel-head-meta">
-        <span class="badge">v2.5 · Engine</span>
+        <span class="badge">v2.6 · Engine</span>
         <span class="badge subtle" id="last-run-meta">No previous runs</span>
       </div>
     </div>
@@ -121,9 +121,14 @@
             <label>Audit Depth</label>
             <select id="audit-depth">
               <option value="standard" selected>Standard (homepage)</option>
-              <option value="deep">Deep (homepage + 3 internal)</option>
+              <option value="deep">Full site crawl (all pages)</option>
               <option value="page">Single page (URL only)</option>
             </select>
+          </div>
+          <div class="field">
+            <label>Max pages <span class="opt">crawl</span></label>
+            <input id="crawl-max" type="number" min="1" max="200" value="75" />
+            <small class="hint">Sitemap-first, then internal links. Cap protects the free CORS proxies.</small>
           </div>
           <div class="field">
             <label>Performance Source</label>
@@ -243,6 +248,18 @@
           </table>
         </div>
       </div>
+    </div>
+
+    <!-- ╔══ SITE-WIDE CRAWL ══╗ (shown only after a full-site crawl) -->
+    <div class="panel" id="site-crawl-wrap" hidden>
+      <div class="panel-head">
+        <div>
+          <h3>Whole-Site Crawl</h3>
+          <span class="muted small">Every reachable page audited — duplicate titles/descriptions, thin pages, missing meta, noindex leaks, orphan pages</span>
+        </div>
+      </div>
+      <div class="crawl-stats" id="site-crawl-summary"></div>
+      <div id="site-crawl-body"></div>
     </div>
 
     <!-- ╔══ LIGHTHOUSE / PERFORMANCE DEEP DIVE ══╗ -->
@@ -532,6 +549,7 @@
       <li><b>Content</b> — word count, Flesch reading ease, keyword density, semantic coverage, heading-to-content ratio, multimedia richness.</li>
       <li><b>Off-Page</b> — protocol &amp; security, social presence, domain hints, content freshness signals, third-party trust markers.</li>
       <li><b>Accessibility &amp; Best Practices</b> — form-field labels, button names, heading order, skip links, ARIA usage, descriptive anchor text, <code>target="_blank"</code> safety, Content Security Policy, Subresource Integrity, resource hints, and PWA chrome (manifest, touch icon, theme color).</li>
+      <li><b>Whole-site crawl</b> — set <em>Audit Depth</em> to <em>Full site crawl</em> to discover and audit every page (sitemap-first, then internal links). Surfaces cross-page issues invisible to a single-page scan: duplicate titles/descriptions/H1s, thin pages, missing meta, <code>noindex</code> leaks, missing canonicals, and potential orphan pages — with a site-wide action plan.</li>
     </ul>
 
     <h3>Scoring methodology</h3>
@@ -591,6 +609,7 @@
 <script src="assets/js/lighthouse.js"></script>
 <script src="assets/js/blockers.js"></script>
 <script src="assets/js/competitors.js"></script>
+<script src="assets/js/crawler.js"></script>
 <script src="assets/js/moz.js"></script>
 <script src="assets/js/history.js"></script>
 <script src="assets/js/renderer.js"></script>
