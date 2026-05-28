@@ -18,6 +18,7 @@ https://<your-user>.github.io/web-scan/
 - **Technical audit** — HTTPS, mobile viewport, robots, sitemap, fetch latency, HTML payload, script/CSS count, mixed content, modern image formats, hreflang, Core Web Vitals (via PSI).
 - **Content analysis** — word count, Flesch reading ease, keyword diversity, top-keyword density, heading rhythm, multimedia richness, freshness markers.
 - **Off-Page signals** — social presence, TLD trust, robots.txt + sitemap, brand entity declarations, E-E-A-T proxies, citation health.
+- **Accessibility & best practices** — form-field labels, button names, heading-order integrity, skip links, ARIA usage, descriptive anchor text, `target="_blank"` safety, Content Security Policy, Subresource Integrity, resource hints (preconnect/preload), CLS-safe image dimensions, and PWA chrome (manifest, Apple touch icon, theme color).
 - **Competitive benchmark** — your site + 5 competitors on a radar / bar / matrix chart with a ranked comparison table.
 - **Prioritized action plan** — P0–P3, quick-win filter, impact + effort estimates, step-by-step fixes.
 - **Email reports** — via EmailJS (browser) or SMTP (GitHub Actions).

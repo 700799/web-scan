@@ -199,6 +199,16 @@
     return m ? m.length : 1;
   }
 
+  // Fraction of meaningful words in `b` that also appear in `a`.
+  // Used to gauge title↔H1 keyword alignment.
+  function sharedWordRatio(a, b) {
+    const wa = new Set(a.split(/\W+/).filter((w) => w.length > 2));
+    const wb = b.split(/\W+/).filter((w) => w.length > 2);
+    if (!wb.length || !wa.size) return 0;
+    const hits = wb.filter((w) => wa.has(w)).length;
+    return hits / wb.length;
+  }
+
   // ── Signal extraction ───────────────────────────────────────
   function extractSignals(html, url, fetchMs) {
     const doc = parseHtml(html);
@@ -249,6 +259,7 @@
     const imgsWithEmptyAlt = imgs.filter((i) => i.hasAttribute('alt') && !attr(i, 'alt').trim());
     const imgsLazy = imgs.filter((i) => attr(i, 'loading').toLowerCase() === 'lazy');
     const imgsModern = imgs.filter((i) => /\.(webp|avif)(\?|$)/i.test(attr(i, 'src')));
+    const imgsDimensioned = imgs.filter((i) => i.hasAttribute('width') && i.hasAttribute('height'));
 
     // Body text & word count
     const bodyClone = doc.body ? doc.body.cloneNode(true) : null;
@@ -332,6 +343,85 @@
       doc.querySelectorAll('img[src^="http:" i], script[src^="http:" i], link[href^="http:" i]').forEach(() => mixedContent++);
     }
 
+    // ── Extended signals (v2.5) ───────────────────────────────
+    // URL structure & hygiene
+    const path = u.pathname;
+    const urlDepth = path.split('/').filter(Boolean).length;
+    const urlUnderscores = /_/.test(path);
+    const urlUppercase = /[A-Z]/.test(path);
+    const cleanUrl = !urlUnderscores && !urlUppercase && urlDepth <= 4;
+
+    // Accessibility
+    const ariaLabels = doc.querySelectorAll('[aria-label], [aria-labelledby]').length;
+    const roles = doc.querySelectorAll('[role]').length;
+    const skipLink = !!doc.querySelector('a[href^="#"][class*="skip" i], a[href="#main" i], a[href="#content" i]');
+    const formFields = Array.from(doc.querySelectorAll('input:not([type="hidden" i]), select, textarea'));
+    const cssEscape = (global.CSS && global.CSS.escape) ? global.CSS.escape : (v) => v.replace(/["\\]/g, '\\$&');
+    const labeledFields = formFields.filter((f) => {
+      if (f.getAttribute('aria-label') || f.getAttribute('aria-labelledby') || f.closest('label')) return true;
+      const id = f.getAttribute('id');
+      if (id) { try { return !!doc.querySelector(`label[for="${cssEscape(id)}"]`); } catch { return false; } }
+      return false;
+    });
+    const namelessButtons = Array.from(doc.querySelectorAll('button')).filter(
+      (b) => !textContentOf(b) && !b.getAttribute('aria-label') && !b.querySelector('img[alt]:not([alt=""])')
+    ).length;
+    let headingOrderOk = true;
+    {
+      const seq = [];
+      doc.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach((h) => seq.push(+h.tagName[1]));
+      for (let i = 1; i < seq.length; i++) { if (seq[i] - seq[i - 1] > 1) { headingOrderOk = false; break; } }
+    }
+
+    // Link quality
+    const genericAnchors = links.filter((a) => /^(click here|here|read more|learn more|more|link|this|go)$/i.test(textContentOf(a))).length;
+    const blankLinks = Array.from(doc.querySelectorAll('a[target="_blank"]'));
+    const unsafeBlank = blankLinks.filter((a) => !/noopener|noreferrer/i.test(a.getAttribute('rel') || '')).length;
+
+    // Security / best practices
+    const cspMeta = !!doc.querySelector('meta[http-equiv="Content-Security-Policy" i]');
+    const scriptsWithSrc = Array.from(doc.querySelectorAll('script[src]'));
+    const externalScripts = scriptsWithSrc.filter((sc) => {
+      try { return new URL(sc.getAttribute('src'), url).hostname.replace(/^www\./, '') !== host; } catch { return false; }
+    });
+    const sriScripts = externalScripts.filter((sc) => sc.hasAttribute('integrity')).length;
+
+    // Resource hints & script loading strategy
+    const preconnect = doc.querySelectorAll('link[rel="preconnect" i]').length;
+    const dnsPrefetch = doc.querySelectorAll('link[rel="dns-prefetch" i]').length;
+    const preload = doc.querySelectorAll('link[rel="preload" i]').length;
+    const asyncScripts = scriptsWithSrc.filter((sc) => sc.hasAttribute('async')).length;
+    const deferScripts = scriptsWithSrc.filter((sc) => sc.hasAttribute('defer') || sc.getAttribute('type') === 'module').length;
+    const renderBlockingJs = scriptsWithSrc.filter((sc) => !sc.hasAttribute('async') && !sc.hasAttribute('defer') && sc.getAttribute('type') !== 'module').length;
+    const inlineScriptBytes = Array.from(doc.querySelectorAll('script:not([src])')).reduce((n, sc) => n + (sc.textContent || '').length, 0);
+
+    // Content structure
+    const paragraphs = doc.querySelectorAll('p').length;
+    const listCount = doc.querySelectorAll('ul, ol').length;
+    const tableCount = doc.querySelectorAll('table').length;
+    const videoCount = doc.querySelectorAll('video, iframe[src*="youtube" i], iframe[src*="vimeo" i]').length;
+    const iframeCount = doc.querySelectorAll('iframe').length;
+    const readingTime = Math.max(1, Math.round(wordCount / 200));
+    const hasFaq = schemaTypes.some((t) => /FAQPage|Question/i.test(t)) || /frequently asked questions|\bFAQ\b/i.test(bodyText);
+    const hasToc = !!doc.querySelector('nav[class*="toc" i], [class*="table-of-contents" i], [id*="toc" i]');
+
+    // PWA & mobile chrome
+    const manifest = !!doc.querySelector('link[rel="manifest" i]');
+    const appleTouchIcon = !!doc.querySelector('link[rel="apple-touch-icon" i]');
+    const themeColor = !!attr(doc.querySelector('meta[name="theme-color" i]'), 'content');
+    const ampLink = !!doc.querySelector('link[rel="amphtml" i]');
+
+    // Meta extras
+    const metaKeywords = attr(doc.querySelector('meta[name="keywords" i]'), 'content');
+    const metaAuthor = attr(doc.querySelector('meta[name="author" i]'), 'content');
+
+    // Title ↔ H1 keyword alignment
+    const h1Text = (headings.h1[0] || '').toLowerCase();
+    const titleH1Overlap = (h1Text && title) ? sharedWordRatio(title.toLowerCase(), h1Text) : 0;
+
+    // Structured-data richness
+    const richSchema = schemaTypes.filter((t) => /Article|BlogPosting|Product|Recipe|Event|FAQPage|HowTo|BreadcrumbList|VideoObject|Review|LocalBusiness/i.test(t));
+
     return {
       url, host, isHttps,
       fetchMs,
@@ -340,7 +430,7 @@
       robots, canonical, viewport, charset, lang,
       headings,
       links: { internal: internal.length, external: external.length, nofollow: nofollow.length, total: internal.length + external.length },
-      images: { total: imgs.length, withAlt: imgsWithAlt.length, emptyAlt: imgsWithEmptyAlt.length, lazy: imgsLazy.length, modern: imgsModern.length },
+      images: { total: imgs.length, withAlt: imgsWithAlt.length, emptyAlt: imgsWithEmptyAlt.length, lazy: imgsLazy.length, modern: imgsModern.length, dimensioned: imgsDimensioned.length },
       bodyText: bodyText.slice(0, 1500),
       wordCount, sentenceCount, flesch,
       og, twitter,
@@ -353,6 +443,30 @@
       socials: Array.from(socialFound),
       mixedContent,
       topKeywords,
+      // v2.5 extended signals
+      urlInfo: { path, depth: urlDepth, underscores: urlUnderscores, uppercase: urlUppercase, cleanUrl },
+      a11y: {
+        ariaLabels, roles, skipLink, headingOrderOk, namelessButtons,
+        inputs: formFields.length, labeledInputs: labeledFields.length,
+      },
+      security: {
+        csp: cspMeta, sriScripts,
+        externalScripts: externalScripts.length, unsafeBlankLinks: unsafeBlank,
+      },
+      hints: {
+        preconnect, dnsPrefetch, preload,
+        asyncScripts, deferScripts, renderBlockingJs,
+        inlineScriptKB: Math.round(inlineScriptBytes / 1024),
+      },
+      structure: {
+        paragraphs, lists: listCount, tables: tableCount, videos: videoCount,
+        iframes: iframeCount, readingTime, hasFaq, hasToc,
+        genericAnchors, blankLinks: blankLinks.length,
+      },
+      pwa: { manifest, appleTouchIcon, themeColor, ampLink },
+      metaExtra: { keywords: metaKeywords, author: metaAuthor },
+      alignment: { titleH1Overlap },
+      richSchema,
     };
   }
 
@@ -432,6 +546,19 @@
     else if (s.microdata > 0) add(2, 4, `${s.microdata} microdata items`, 'warn');
     else add(0, 4, 'No structured data', 'warn');
 
+    // Clean URL structure (4)
+    if (s.urlInfo.cleanUrl) add(4, 4, 'Clean URL structure', 'pass');
+    else add(2, 4, 'URL has underscores / caps / deep nesting', 'warn');
+
+    // Title ↔ H1 keyword alignment (4)
+    if (s.alignment.titleH1Overlap >= 0.3) add(4, 4, 'Title aligns with H1', 'pass');
+    else if (s.headings.h1.length) add(2, 4, 'Title & H1 keywords diverge', 'warn');
+    else add(0, 4, 'No H1 to align with title', 'warn');
+
+    // Descriptive anchor text (4)
+    if (s.structure.genericAnchors === 0) add(4, 4, 'Descriptive anchor text', 'pass');
+    else add(1, 4, `${s.structure.genericAnchors} generic anchors`, 'warn');
+
     return { score: pct((total / max) * 100), details, raw: total, max };
   }
 
@@ -489,6 +616,29 @@
     // hreflang (4)
     if (s.hreflang.length > 0) add(4, 4, `${s.hreflang.length} hreflang variants`, 'pass');
     else add(2, 4, 'No hreflang (single locale)', 'info');
+
+    // Render-blocking JavaScript (6)
+    if (s.hints.renderBlockingJs === 0) add(6, 6, 'No render-blocking scripts', 'pass');
+    else if (s.hints.renderBlockingJs <= 3) add(3, 6, `${s.hints.renderBlockingJs} render-blocking scripts`, 'warn');
+    else add(1, 6, `${s.hints.renderBlockingJs} render-blocking scripts`, 'fail');
+
+    // Image dimensions / CLS safety (6)
+    if (s.images.total === 0) add(5, 6, 'No images', 'info');
+    else if (s.images.dimensioned / s.images.total >= 0.8) add(6, 6, 'Images dimensioned (CLS-safe)', 'pass');
+    else add(2, 6, `${s.images.dimensioned}/${s.images.total} images sized`, 'warn');
+
+    // Resource hints (4)
+    if (s.hints.preconnect + s.hints.preload > 0) add(4, 4, `${s.hints.preconnect} preconnect · ${s.hints.preload} preload`, 'pass');
+    else add(2, 4, 'No preconnect/preload hints', 'info');
+
+    // Link safety — target=_blank (4)
+    if (s.security.unsafeBlankLinks === 0) add(4, 4, 'target=_blank links safe', 'pass');
+    else add(1, 4, `${s.security.unsafeBlankLinks} unsafe target=_blank`, 'warn');
+
+    // Subresource Integrity on third-party JS (4)
+    if (s.security.externalScripts === 0) add(3, 4, 'No third-party scripts', 'info');
+    else if (s.security.sriScripts >= s.security.externalScripts) add(4, 4, 'All third-party JS uses SRI', 'pass');
+    else add(1, 4, `${s.security.sriScripts}/${s.security.externalScripts} scripts use SRI`, 'warn');
 
     // PSI Core Web Vitals (14) if available
     if (perf && perf.performance != null) {
@@ -562,6 +712,15 @@
     const hasDate = /\b20\d{2}\b/.test(s.bodyText) || s.ldjson > 0;
     if (hasDate) add(10, 10, 'Date/freshness markers present', 'pass');
     else add(4, 10, 'No date markers', 'warn');
+
+    // Scannability — lists & paragraphs (10)
+    if (s.structure.lists >= 1 && s.structure.paragraphs >= 3) add(10, 10, `${s.structure.lists} lists · ${s.structure.paragraphs} paragraphs`, 'pass');
+    else if (s.structure.paragraphs >= 2) add(5, 10, 'Limited scannable structure', 'warn');
+    else add(2, 10, 'Wall-of-text risk', 'fail');
+
+    // FAQ / supporting content (5)
+    if (s.structure.hasFaq) add(5, 5, 'FAQ-style content detected', 'pass');
+    else add(2, 5, 'No FAQ section', 'info');
 
     return { score: pct((total / max) * 100), details, raw: total, max };
   }
@@ -831,6 +990,95 @@
       push('P1', 'Technical', `Improve Core Web Vitals (PSI ${audit.perf.performance})`, `Lighthouse performance score is ${audit.perf.performance}/100. LCP ${audit.perf.lcp || '?'}, CLS ${audit.perf.cls || '?'}.`, 'Optimize LCP image, defer JS, reduce CLS via dimensioned images & reserved space.', ['Identify LCP element', 'Preload LCP asset', 'Defer non-critical JS', 'Add width/height to images', 'Inline critical CSS'], '1–3 days', 85);
     }
 
+    // ── Accessibility ──────────────────────────────────────────
+    if (s.a11y.inputs > 0 && s.a11y.labeledInputs < s.a11y.inputs) {
+      const missing = s.a11y.inputs - s.a11y.labeledInputs;
+      push('P1', 'On-Page', 'Label every form field', `${missing} of ${s.a11y.inputs} form fields have no associated <label> or aria-label.`, 'Associate every input with a visible <label for> or an aria-label so assistive tech can announce it.', ['Add <label for="id"> to each field', 'Use aria-label where a visible label is undesirable', 'Verify with a screen reader / Lighthouse a11y'], '1 hr', 60);
+    }
+    if (s.a11y.namelessButtons > 0) {
+      push('P2', 'On-Page', 'Give buttons accessible names', `${s.a11y.namelessButtons} button(s) have no text or aria-label — opaque to assistive tech and voice control.`, 'Add visible text, an aria-label, or an alt-texted icon to every button.', ['Locate icon-only buttons', 'Add aria-label describing the action', 'Re-test in Lighthouse a11y'], '30 min', 50, true);
+    }
+    if (!s.a11y.headingOrderOk) {
+      push('P2', 'On-Page', 'Fix heading level order', 'Heading levels skip (e.g. H1 → H3), breaking the document outline for screen readers and search parsers.', 'Use headings sequentially (H1→H2→H3) without skipping levels; control size with CSS, not tag choice.', ['Map the current heading sequence', 'Re-tag to remove skipped levels', 'Style visually with CSS'], '1 hr', 45);
+    }
+
+    // ── Link quality & safety ──────────────────────────────────
+    if (s.structure.genericAnchors > 0) {
+      push('P2', 'On-Page', 'Replace generic anchor text', `${s.structure.genericAnchors} links use vague text like "click here" or "read more".`, 'Use descriptive, keyword-relevant anchor text — it helps ranking, context, and accessibility.', ['Find generic anchors', 'Rewrite with descriptive phrasing', 'Keep anchors concise & unique'], '1 hr', 55);
+    }
+    if (s.security.unsafeBlankLinks > 0) {
+      push('P2', 'Technical', 'Secure target="_blank" links', `${s.security.unsafeBlankLinks} links open new tabs without rel="noopener" — a reverse-tabnabbing risk.`, 'Add rel="noopener noreferrer" to every target="_blank" link.', ['Grep for target="_blank"', 'Append rel="noopener noreferrer"', 'Verify external links still open'], '20 min', 40, true);
+    }
+
+    // ── Performance / rendering ────────────────────────────────
+    if (s.hints.renderBlockingJs > 3) {
+      push('P1', 'Technical', 'Eliminate render-blocking JavaScript', `${s.hints.renderBlockingJs} scripts load synchronously, delaying first paint.`, 'Add async/defer to non-critical scripts or load them as type="module".', ['Identify synchronous <script src>', 'Add defer for order-dependent scripts', 'Add async for independent scripts'], '2 hrs', 70, true);
+    }
+    if (s.hints.preconnect + s.hints.preload === 0 && s.security.externalScripts > 0) {
+      push('P2', 'Technical', 'Add resource hints', 'No preconnect/preload hints, yet the page loads third-party origins — connection setup sits on the critical path.', 'Add <link rel="preconnect"> for key third-party origins and preload the LCP image/font.', ['Identify critical third-party origins', 'Add preconnect for each', 'Preload the LCP asset & primary web font'], '30 min', 55, true);
+    }
+    if (s.hints.inlineScriptKB > 50) {
+      push('P2', 'Technical', 'Externalize large inline scripts', `~${s.hints.inlineScriptKB}KB of inline JavaScript inflates the HTML document and blocks parsing.`, 'Move large inline scripts to cacheable external files loaded with defer.', ['Extract inline JS to .js files', 'Load with defer', 'Enable long-lived cache headers'], '2 hrs', 50);
+    }
+    if (s.images.total > 0 && s.images.dimensioned / s.images.total < 0.8) {
+      push('P1', 'Technical', 'Set explicit image dimensions', `${s.images.total - s.images.dimensioned} of ${s.images.total} images lack width/height — a leading cause of layout shift (CLS).`, 'Add width and height attributes (or CSS aspect-ratio) to every image to reserve layout space.', ['Add width & height to <img>', 'Or set CSS aspect-ratio', 'Re-measure CLS in PageSpeed Insights'], '1–2 hrs', 70);
+    }
+
+    // ── Security headers ───────────────────────────────────────
+    if (!s.security.csp) {
+      push('P3', 'Technical', 'Add a Content Security Policy', 'No CSP detected — without one the page is more exposed to XSS and content injection.', 'Define a CSP via HTTP header (preferred) or a <meta http-equiv> tag, starting in Report-Only mode.', ['Inventory script/style/image origins', 'Draft a CSP in Report-Only mode', 'Monitor violations, then enforce'], '1 day', 45);
+    }
+    if (s.security.externalScripts > 0 && s.security.sriScripts < s.security.externalScripts) {
+      push('P3', 'Technical', 'Add Subresource Integrity to CDN scripts', `${s.security.externalScripts - s.security.sriScripts} third-party scripts load without an integrity hash.`, 'Add integrity + crossorigin attributes so tampered CDN files are rejected by the browser.', ['Generate SRI hashes for each CDN asset', 'Add integrity & crossorigin attributes', 'Verify resources still load'], '1 hr', 35);
+    }
+
+    // ── Structured-data depth ──────────────────────────────────
+    if (s.ldjson > 0 && !s.schemaTypes.some((t) => /BreadcrumbList/i.test(t))) {
+      push('P2', 'On-Page', 'Add BreadcrumbList schema', 'No breadcrumb structured data — breadcrumbs earn richer SERP display and clarify site hierarchy.', 'Add BreadcrumbList JSON-LD reflecting the page\'s position in the site.', ['Map the breadcrumb trail', 'Emit BreadcrumbList JSON-LD', 'Validate with Rich Results Test'], '1 hr', 50);
+    }
+    if (s.structure.hasFaq && !s.schemaTypes.some((t) => /FAQPage|Question/i.test(t))) {
+      push('P2', 'On-Page', 'Mark up FAQ content with schema', 'FAQ-style content exists but lacks FAQPage schema — you\'re leaving FAQ rich results on the table.', 'Wrap question/answer pairs in FAQPage JSON-LD.', ['Identify Q&A pairs', 'Generate FAQPage JSON-LD', 'Validate with Rich Results Test'], '1 hr', 55, true);
+    }
+    if (s.structure.videos > 0 && !s.schemaTypes.some((t) => /VideoObject/i.test(t))) {
+      push('P3', 'On-Page', 'Add VideoObject schema', `${s.structure.videos} embedded video(s) without VideoObject markup — missing video rich results & Google Video indexing.`, 'Add VideoObject JSON-LD with name, description, thumbnailUrl, and uploadDate.', ['Collect video metadata', 'Emit VideoObject JSON-LD', 'Validate with Rich Results Test'], '1 hr', 40);
+    }
+
+    // ── E-E-A-T / authorship ───────────────────────────────────
+    if (!s.metaExtra.author && !s.schemaTypes.some((t) => /Person|Author/i.test(t))) {
+      push('P2', 'Off-Page', 'Add author / authorship signals', 'No author meta or Person schema — weak E-E-A-T, which Google weighs heavily for YMYL and expertise topics.', 'Add visible bylines, an author bio, and Article+Person JSON-LD with author details.', ['Add a visible author byline', 'Create author bio pages', 'Add author to Article JSON-LD'], '2 hrs', 55);
+    }
+
+    // ── Content scannability ───────────────────────────────────
+    if (s.wordCount >= 600 && s.structure.lists === 0) {
+      push('P2', 'Content', 'Break content into scannable lists', `${s.wordCount} words with no lists — dense prose lowers dwell time and comprehension.`, 'Convert dense passages into bulleted/numbered lists and add descriptive subheadings.', ['Identify enumerable passages', 'Convert to <ul>/<ol>', 'Add descriptive subheadings'], '1 hr', 45, true);
+    }
+    if (s.wordCount >= 1500 && !s.structure.hasToc) {
+      push('P3', 'Content', 'Add a table of contents', `Long content (${s.wordCount} words) with no in-page table of contents hurts navigation and can earn jump-to links in SERPs.`, 'Add an anchored table of contents linking to each H2/H3 section.', ['Add IDs to section headings', 'Build a linked ToC at the top', 'Test anchor scrolling'], '1 hr', 40);
+    }
+
+    // ── PWA / mobile chrome ────────────────────────────────────
+    if (!s.pwa.manifest) {
+      push('P3', 'Technical', 'Add a web app manifest', 'No manifest.json — blocks installability and richer mobile presentation.', 'Add a manifest with name, icons, theme_color, and display, linked via <link rel="manifest">.', ['Create manifest.json', 'Reference it in <head>', 'Add maskable icons'], '1 hr', 35);
+    }
+    if (!s.pwa.appleTouchIcon) {
+      push('P3', 'On-Page', 'Add an Apple touch icon', 'No apple-touch-icon — iOS home-screen bookmarks show a blurry screenshot instead of your brand mark.', 'Add a 180×180 apple-touch-icon link in <head>.', ['Export a 180×180 PNG icon', 'Add <link rel="apple-touch-icon">'], '15 min', 25, true);
+    }
+
+    // ── URL hygiene ────────────────────────────────────────────
+    if (!s.urlInfo.cleanUrl) {
+      push('P3', 'Technical', 'Improve URL structure', `URL uses ${s.urlInfo.underscores ? 'underscores ' : ''}${s.urlInfo.uppercase ? 'uppercase ' : ''}${s.urlInfo.depth > 4 ? 'deep nesting ' : ''}— hyphenated, lowercase, shallow URLs are clearer to users and crawlers.`, 'Adopt lowercase, hyphen-separated, shallow paths; 301-redirect legacy URLs.', ['Define a clean URL convention', '301-redirect old URLs', 'Update internal links & sitemap'], '2–4 hrs', 40);
+    }
+
+    // ── Deprecated meta ────────────────────────────────────────
+    if (s.metaExtra.keywords) {
+      push('P3', 'On-Page', 'Drop the meta keywords tag', 'A meta keywords tag is present — ignored by Google since 2009 and it can leak target terms to competitors.', 'Remove the meta keywords tag entirely.', ['Delete <meta name="keywords">'], '5 min', 15, true);
+    }
+
+    // ── International ───────────────────────────────────────────
+    if (s.hreflang.length > 0 && !s.hreflang.some((h) => /x-default/i.test(h))) {
+      push('P3', 'Technical', 'Add hreflang x-default', 'hreflang variants exist but no x-default — search engines lack a fallback for unmatched locales.', 'Add an hreflang="x-default" entry pointing to your default/global page.', ['Add the x-default alternate link', 'Validate hreflang cluster reciprocity'], '30 min', 35);
+    }
+
     // Sort by composite priority value
     const order = { P0: 0, P1: 1, P2: 2, P3: 3 };
     a.sort((x, y) => order[x.priority] - order[y.priority] || y.impact - x.impact);
@@ -840,7 +1088,7 @@
   // ── Build audit items for the UI grid ──────────────────────
   function buildAuditItems(audit) {
     const s = audit.signals;
-    const groups = { onpage: [], technical: [], content: [], offpage: [] };
+    const groups = { onpage: [], technical: [], content: [], offpage: [], a11y: [] };
     const push = (g, status, title, detail, value) => groups[g].push({ status, title, detail, value });
 
     // On-page
@@ -869,6 +1117,12 @@
       s.ldjson ? `${s.ldjson} JSON-LD blocks · ${s.schemaTypes.slice(0,4).join(', ') || 'untyped'}` : 'no JSON-LD',
       `${s.ldjson}`);
     push('onpage', s.lang ? 'pass' : 'warn', 'Language', s.lang || 'not declared', s.lang || '—');
+    push('onpage', s.urlInfo.cleanUrl ? 'pass' : 'warn', 'URL Structure',
+      `depth ${s.urlInfo.depth}${s.urlInfo.underscores ? ' · underscores' : ''}${s.urlInfo.uppercase ? ' · uppercase' : ''}`,
+      s.urlInfo.cleanUrl ? 'clean' : '!');
+    push('onpage', s.alignment.titleH1Overlap >= 0.3 ? 'pass' : 'warn', 'Title ↔ H1 Alignment',
+      `${Math.round(s.alignment.titleH1Overlap * 100)}% shared keywords`, `${Math.round(s.alignment.titleH1Overlap * 100)}%`);
+    push('onpage', s.metaExtra.author ? 'pass' : 'info', 'Author Meta', s.metaExtra.author || 'not set', s.metaExtra.author ? 'set' : '—');
 
     // Technical
     push('technical', s.isHttps ? 'pass' : 'fail', 'HTTPS', s.isHttps ? 'TLS enabled' : 'HTTP only', s.isHttps ? 'on' : 'off');
@@ -894,6 +1148,10 @@
       'Modern Image Formats', `${s.images.modern}/${s.images.total} WebP/AVIF`, `${s.images.modern}`);
     push('technical', s.hreflang.length > 0 ? 'pass' : 'info',
       'hreflang', s.hreflang.length ? s.hreflang.join(', ') : 'single locale', `${s.hreflang.length}`);
+    push('technical', s.images.total === 0 ? 'info' : (s.images.dimensioned / s.images.total >= 0.8 ? 'pass' : 'warn'),
+      'Image Dimensions (CLS)', `${s.images.dimensioned}/${s.images.total} have width+height`, `${s.images.dimensioned}`);
+    push('technical', s.hints.renderBlockingJs === 0 ? 'pass' : 'warn',
+      'Render-Blocking JS', `${s.hints.renderBlockingJs} blocking · ${s.hints.asyncScripts} async · ${s.hints.deferScripts} defer`, `${s.hints.renderBlockingJs}`);
     if (audit.perf) {
       push('technical', audit.perf.performance >= 80 ? 'pass' : (audit.perf.performance >= 50 ? 'warn' : 'fail'),
         'PSI Performance', `LCP ${audit.perf.lcp || '?'} · CLS ${audit.perf.cls || '?'} · TBT ${audit.perf.tbt || '?'}`,
@@ -919,6 +1177,13 @@
     push('content', s.images.total >= 3 ? 'pass' : 'warn',
       'Multimedia', `${s.images.total} images`, `${s.images.total}`);
     push('content', 'info', 'Forms', `${s.forms} forms on page (lead-capture proxy)`, `${s.forms}`);
+    push('content', 'info', 'Reading Time', `~${s.structure.readingTime} min at 200 wpm`, `${s.structure.readingTime}m`);
+    push('content', s.structure.lists >= 1 ? 'pass' : 'warn', 'Lists & Scannability',
+      `${s.structure.lists} lists · ${s.structure.paragraphs} paragraphs`, `${s.structure.lists}`);
+    push('content', s.structure.hasFaq ? 'pass' : 'info', 'FAQ Content',
+      s.structure.hasFaq ? 'detected' : 'none detected', s.structure.hasFaq ? 'OK' : '—');
+    push('content', 'info', 'Rich Media',
+      `${s.structure.videos} video · ${s.images.total} img · ${s.structure.tables} tables`, `${s.structure.videos}`);
 
     // Off-page
     push('offpage', s.socials.length >= 3 ? 'pass' : (s.socials.length >= 1 ? 'warn' : 'fail'),
@@ -935,6 +1200,38 @@
     push('offpage', 'info', 'E-E-A-T Markers',
       /(author|byline|reviewed by|about us)/i.test(s.bodyText) ? 'author/about signals present' : 'weak — consider adding author bylines & about page',
       /(author|byline|reviewed by|about us)/i.test(s.bodyText) ? 'OK' : '—');
+
+    // Accessibility & Best Practices
+    push('a11y', s.a11y.inputs === 0 ? 'info' : (s.a11y.labeledInputs >= s.a11y.inputs ? 'pass' : 'fail'),
+      'Form Labels', s.a11y.inputs ? `${s.a11y.labeledInputs}/${s.a11y.inputs} fields labeled` : 'no form fields',
+      `${s.a11y.labeledInputs}/${s.a11y.inputs}`);
+    push('a11y', s.a11y.namelessButtons === 0 ? 'pass' : 'warn', 'Button Names',
+      s.a11y.namelessButtons ? `${s.a11y.namelessButtons} lack an accessible name` : 'all buttons named', `${s.a11y.namelessButtons}`);
+    push('a11y', s.a11y.headingOrderOk ? 'pass' : 'warn', 'Heading Order',
+      s.a11y.headingOrderOk ? 'no skipped levels' : 'skipped heading levels', s.a11y.headingOrderOk ? 'OK' : '!');
+    push('a11y', s.a11y.skipLink ? 'pass' : 'info', 'Skip Link',
+      s.a11y.skipLink ? 'skip-to-content present' : 'no skip link', s.a11y.skipLink ? 'OK' : '—');
+    push('a11y', s.a11y.ariaLabels > 0 ? 'pass' : 'info', 'ARIA Labels',
+      `${s.a11y.ariaLabels} aria-label/labelledby · ${s.a11y.roles} roles`, `${s.a11y.ariaLabels}`);
+    push('a11y', s.structure.genericAnchors === 0 ? 'pass' : 'warn', 'Anchor Text',
+      s.structure.genericAnchors ? `${s.structure.genericAnchors} generic ("click here")` : 'descriptive', `${s.structure.genericAnchors}`);
+    push('a11y', s.security.unsafeBlankLinks === 0 ? 'pass' : 'warn', 'Link Safety',
+      s.security.unsafeBlankLinks ? `${s.security.unsafeBlankLinks} target=_blank without noopener` : 'safe', `${s.security.unsafeBlankLinks}`);
+    push('a11y', s.security.csp ? 'pass' : 'info', 'Content Security Policy',
+      s.security.csp ? 'CSP meta present' : 'no CSP meta (often set via headers)', s.security.csp ? 'OK' : '—');
+    push('a11y', s.security.externalScripts === 0 ? 'info' : (s.security.sriScripts >= s.security.externalScripts ? 'pass' : 'warn'),
+      'Subresource Integrity', s.security.externalScripts ? `${s.security.sriScripts}/${s.security.externalScripts} third-party scripts` : 'no third-party JS',
+      `${s.security.sriScripts}/${s.security.externalScripts}`);
+    push('a11y', s.hints.renderBlockingJs === 0 ? 'pass' : 'warn', 'Render-Blocking JS',
+      `${s.hints.renderBlockingJs} blocking · ${s.hints.asyncScripts} async · ${s.hints.deferScripts} defer`, `${s.hints.renderBlockingJs}`);
+    push('a11y', (s.hints.preconnect + s.hints.preload) > 0 ? 'pass' : 'info', 'Resource Hints',
+      `${s.hints.preconnect} preconnect · ${s.hints.preload} preload · ${s.hints.dnsPrefetch} dns-prefetch`, `${s.hints.preconnect + s.hints.preload}`);
+    push('a11y', s.pwa.manifest ? 'pass' : 'info', 'Web App Manifest',
+      s.pwa.manifest ? 'manifest linked' : 'no manifest', s.pwa.manifest ? 'OK' : '—');
+    push('a11y', s.pwa.appleTouchIcon ? 'pass' : 'info', 'Apple Touch Icon',
+      s.pwa.appleTouchIcon ? 'present' : 'missing', s.pwa.appleTouchIcon ? 'OK' : '—');
+    push('a11y', s.pwa.themeColor ? 'pass' : 'info', 'Theme Color',
+      s.pwa.themeColor ? 'set' : 'not set', s.pwa.themeColor ? 'OK' : '—');
 
     return groups;
   }

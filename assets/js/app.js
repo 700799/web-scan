@@ -242,6 +242,7 @@
     R.renderAuditGrid('tech-grid', groups.technical);
     R.renderAuditGrid('content-grid', groups.content);
     R.renderAuditGrid('offpage-grid', groups.offpage);
+    R.renderAuditGrid('a11y-grid', groups.a11y);
     R.renderActions(actions);
 
     // Trend sparklines for this host (built from IndexedDB)
