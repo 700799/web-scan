@@ -271,6 +271,12 @@
     R.renderAuditGrid('content-grid', groups.content);
     R.renderAuditGrid('offpage-grid', groups.offpage);
     R.renderAuditGrid('a11y-grid', groups.a11y);
+    if (groups.wordpress && groups.wordpress.length > 0) {
+      R.renderAuditGrid('wordpress-grid', groups.wordpress);
+      document.getElementById('wordpress-section')?.removeAttribute('hidden');
+    } else {
+      document.getElementById('wordpress-section')?.setAttribute('hidden', '');
+    }
     R.renderActions(actions);
 
     // Whole-site crawl (only present after a full-site audit)
