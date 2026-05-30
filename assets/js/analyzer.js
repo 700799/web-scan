@@ -241,17 +241,23 @@
     // Links
     const links = Array.from(doc.querySelectorAll('a[href]'));
     const internal = [], external = [], nofollow = [];
+    const internalSet = new Set(); // deduped, fragment-stripped internal URLs (for crawling)
     links.forEach((a) => {
       const href = a.getAttribute('href');
       if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
       try {
         const abs = new URL(href, url);
-        if (abs.hostname.replace(/^www\./, '') === host) internal.push(abs.href);
-        else external.push(abs.href);
+        if (abs.hostname.replace(/^www\./, '') === host) {
+          internal.push(abs.href);
+          // Normalize for crawl: drop hash, keep query (some sites paginate via ?page=)
+          abs.hash = '';
+          internalSet.add(abs.href);
+        } else external.push(abs.href);
         const rel = (a.getAttribute('rel') || '').toLowerCase();
         if (rel.includes('nofollow')) nofollow.push(abs.href);
       } catch {}
     });
+    const internalLinks = Array.from(internalSet).slice(0, 300);
 
     // Images
     const imgs = Array.from(doc.querySelectorAll('img'));
@@ -422,6 +428,42 @@
     // Structured-data richness
     const richSchema = schemaTypes.filter((t) => /Article|BlogPosting|Product|Recipe|Event|FAQPage|HowTo|BreadcrumbList|VideoObject|Review|LocalBusiness/i.test(t));
 
+    // ── WordPress detection (v2.7) ──────────────────────────────
+    // Detect if site is WordPress and extract platform-specific signals
+    let isWordPress = false;
+    let wpVersion = null;
+    let wpTheme = null;
+    let wpPlugins = [];
+    let wpGenerator = null;
+
+    // Check for WordPress indicators
+    if (/wp-content|wp-includes|\/wp-json\/|wordpress/.test(html)) isWordPress = true;
+
+    // WordPress generator meta tag
+    const generatorMeta = attr(doc.querySelector('meta[name="generator" i]'), 'content');
+    if (generatorMeta && /wordpress/i.test(generatorMeta)) {
+      isWordPress = true;
+      wpGenerator = generatorMeta;
+      const vMatch = generatorMeta.match(/WordPress\s+([\d.]+)/i);
+      if (vMatch) wpVersion = vMatch[1];
+    }
+
+    // Theme detection from stylesheet hrefs (common pattern: /wp-content/themes/theme-name/)
+    const themeMatch = html.match(/\/wp-content\/themes\/([\w-]+)/);
+    if (themeMatch) {
+      wpTheme = themeMatch[1];
+      isWordPress = true;
+    }
+
+    // Plugin detection from script/link src patterns (/wp-content/plugins/plugin-name/)
+    const pluginMatches = html.match(/\/wp-content\/plugins\/([\w-]+)/g) || [];
+    wpPlugins = [...new Set(pluginMatches.map(m => m.replace(/\/wp-content\/plugins\//, '').replace(/\/$/, '')))];
+
+    // WP-specific features
+    const hasWpComments = !!doc.querySelector('.comment-form, #respond, .wp-comments-section') || /wp-comment|comment-form/i.test(html);
+    const hasWpMeta = !!doc.querySelector('meta[name*="wp-"]');
+    const hasRestApi = /\/wp-json\//.test(html) || !!doc.querySelector('link[rel="https://api.w.org/"]');
+
     return {
       url, host, isHttps,
       fetchMs,
@@ -430,6 +472,7 @@
       robots, canonical, viewport, charset, lang,
       headings,
       links: { internal: internal.length, external: external.length, nofollow: nofollow.length, total: internal.length + external.length },
+      internalLinks,
       images: { total: imgs.length, withAlt: imgsWithAlt.length, emptyAlt: imgsWithEmptyAlt.length, lazy: imgsLazy.length, modern: imgsModern.length, dimensioned: imgsDimensioned.length },
       bodyText: bodyText.slice(0, 1500),
       wordCount, sentenceCount, flesch,
@@ -467,6 +510,15 @@
       metaExtra: { keywords: metaKeywords, author: metaAuthor },
       alignment: { titleH1Overlap },
       richSchema,
+      wordpress: {
+        isWordPress,
+        version: wpVersion,
+        theme: wpTheme,
+        plugins: wpPlugins,
+        generator: wpGenerator,
+        hasComments: hasWpComments,
+        hasRestApi,
+      },
     };
   }
 
@@ -812,15 +864,19 @@
     onProgress({ phase: 'parse', msg: `   ✓ fetched ${(page.html.length / 1024).toFixed(1)} KB via ${page.via} in ${(page.ms / 1000).toFixed(2)}s` });
     const signals = extractSignals(page.html, url, page.ms);
 
-    // Robots & sitemap probes (best-effort)
-    onProgress({ phase: 'probe', msg: 'Probing robots.txt & sitemap' });
-    const origin = new URL(url).origin;
-    const robotsProbe = await probeHead(origin + '/robots.txt', proxyKey).catch(() => ({ ok: false }));
-    let sitemapFound = false;
-    if (robotsProbe.ok && /sitemap:/i.test(robotsProbe.text || '')) sitemapFound = true;
-    if (!sitemapFound) {
-      const smProbe = await probeHead(origin + '/sitemap.xml', proxyKey).catch(() => ({ ok: false }));
-      if (smProbe.ok && /<urlset|<sitemapindex/i.test(smProbe.text || '')) sitemapFound = true;
+    // Robots & sitemap probes (best-effort). Skipped for crawl sub-pages
+    // (probeRobots:false) since they share the origin's robots/sitemap and
+    // we don't want to spend proxy budget re-probing it for every page.
+    let robotsProbe = { ok: false }, sitemapFound = false;
+    if (opts.probeRobots !== false) {
+      onProgress({ phase: 'probe', msg: 'Probing robots.txt & sitemap' });
+      const origin = new URL(url).origin;
+      robotsProbe = await probeHead(origin + '/robots.txt', proxyKey).catch(() => ({ ok: false }));
+      if (robotsProbe.ok && /sitemap:/i.test(robotsProbe.text || '')) sitemapFound = true;
+      if (!sitemapFound) {
+        const smProbe = await probeHead(origin + '/sitemap.xml', proxyKey).catch(() => ({ ok: false }));
+        if (smProbe.ok && /<urlset|<sitemapindex/i.test(smProbe.text || '')) sitemapFound = true;
+      }
     }
 
     // Lighthouse (full mobile + desktop via PSI)
@@ -1079,6 +1135,40 @@
       push('P3', 'Technical', 'Add hreflang x-default', 'hreflang variants exist but no x-default — search engines lack a fallback for unmatched locales.', 'Add an hreflang="x-default" entry pointing to your default/global page.', ['Add the x-default alternate link', 'Validate hreflang cluster reciprocity'], '30 min', 35);
     }
 
+    // ── WordPress-specific recommendations ──────────────────────
+    if (s.wordpress.isWordPress) {
+      // Warn if no sitemap (common WP issue)
+      if (!audit.extras.sitemap) {
+        push('P1', 'WordPress', 'Enable WordPress sitemaps', 'No XML sitemap detected — WordPress can auto-generate them if enabled.', 'Install a WordPress SEO plugin (Yoast, Rank Math, All in One SEO) or enable native WordPress sitemaps.', ['Activate WordPress SEO plugin or native sitemap', 'Verify sitemap at /wp-sitemap.xml or /sitemap.xml', 'Submit to Google Search Console'], '30 min', 75, true);
+      }
+
+      // Warn if WP REST API is exposed without need
+      if (s.wordpress.hasRestApi) {
+        push('P3', 'WordPress', 'Secure WordPress REST API access', 'WordPress REST API endpoint is publicly accessible — restricts to authenticated users if not needed.', 'If only admins need API access, disable with a plugin or remove the Link header from unauthenticated responses.', ['Check wp-json for public endpoints', 'Install REST API security plugin', 'Or add code to restrict unauthenticated access'], '1 hr', 35);
+      }
+
+      // Plugin update awareness
+      if (s.wordpress.plugins.length > 0) {
+        const pluginList = s.wordpress.plugins.slice(0, 5).join(', ') + (s.wordpress.plugins.length > 5 ? ` + ${s.wordpress.plugins.length - 5} more` : '');
+        push('P2', 'WordPress', 'Keep plugins updated', `WordPress is running ${s.wordpress.plugins.length} plugins: ${pluginList}. Out-of-date plugins are a common vulnerability vector.`, 'Regularly update all plugins from the WordPress admin dashboard; remove unused plugins; audit for security.', ['Go to Plugins > Updates in WordPress admin', 'Update all available plugins', 'Deactivate & delete unused plugins', 'Run security scan (e.g., Wordfence)'], '30 min', 60);
+      }
+
+      // Theme update check
+      if (s.wordpress.theme) {
+        push('P2', 'WordPress', 'Verify theme is up to date', `Using theme: ${s.wordpress.theme}. Ensure it's regularly updated for security & compatibility.`, 'Check Appearance > Themes in WordPress admin for updates; enable automatic updates if available.', ['Dashboard > Appearance > Themes', 'Check for theme updates', 'Enable auto-updates if available'], '15 min', 55);
+      }
+
+      // Version exposure (security concern)
+      if (s.wordpress.version) {
+        push('P3', 'WordPress', 'Check WordPress version is current', `WordPress version ${s.wordpress.version} detected in header. If outdated, update immediately. If outdated, it exposes known vulnerabilities.`, 'Update WordPress to the latest stable version; enable automatic core updates in wp-config.php.', ['Dashboard > Updates', 'Check latest WordPress version', 'Enable: define(\'WP_AUTO_UPDATE_CORE\', true);'], '1 hr', 65);
+      }
+
+      // Comments form optimization for SEO
+      if (s.wordpress.hasComments) {
+        push('P3', 'WordPress', 'Optimize comments for SEO', 'WordPress comments detected — moderate spam, enable structured data for comments, and ensure comment content doesn\'t leak private info.', 'Enable comment moderation, add schema.org/Comment markup, configure gravatar caching, and consider disabling on non-blog pages.', ['Enable comment moderation in Settings', 'Consider Comment Author Name Relay in SEO plugin', 'Disable comments on non-blog pages'], '2 hrs', 40);
+      }
+    }
+
     // Sort by composite priority value
     const order = { P0: 0, P1: 1, P2: 2, P3: 3 };
     a.sort((x, y) => order[x.priority] - order[y.priority] || y.impact - x.impact);
@@ -1088,7 +1178,7 @@
   // ── Build audit items for the UI grid ──────────────────────
   function buildAuditItems(audit) {
     const s = audit.signals;
-    const groups = { onpage: [], technical: [], content: [], offpage: [], a11y: [] };
+    const groups = { onpage: [], technical: [], content: [], offpage: [], a11y: [], wordpress: [] };
     const push = (g, status, title, detail, value) => groups[g].push({ status, title, detail, value });
 
     // On-page
@@ -1232,6 +1322,28 @@
       s.pwa.appleTouchIcon ? 'present' : 'missing', s.pwa.appleTouchIcon ? 'OK' : '—');
     push('a11y', s.pwa.themeColor ? 'pass' : 'info', 'Theme Color',
       s.pwa.themeColor ? 'set' : 'not set', s.pwa.themeColor ? 'OK' : '—');
+
+    // WordPress Platform
+    if (s.wordpress.isWordPress) {
+      push('wordpress', 'info', 'Platform Detected', 'WordPress detected', 'WP');
+      if (s.wordpress.version) {
+        push('wordpress', 'info', 'WordPress Version', `v${s.wordpress.version}`, `${s.wordpress.version}`);
+      }
+      if (s.wordpress.theme) {
+        push('wordpress', 'info', 'Theme', `${s.wordpress.theme}`, s.wordpress.theme);
+      }
+      if (s.wordpress.plugins.length > 0) {
+        push('wordpress', s.wordpress.plugins.length <= 5 ? 'pass' : (s.wordpress.plugins.length <= 15 ? 'warn' : 'fail'),
+          'Plugins', `${s.wordpress.plugins.length} plugin${s.wordpress.plugins.length !== 1 ? 's' : ''}: ${s.wordpress.plugins.slice(0, 3).join(', ')}${s.wordpress.plugins.length > 3 ? '...' : ''}`,
+          `${s.wordpress.plugins.length}`);
+      }
+      if (s.wordpress.hasRestApi) {
+        push('wordpress', 'warn', 'REST API Exposure', 'WordPress REST API publicly accessible', 'exposed');
+      }
+      if (s.wordpress.hasComments) {
+        push('wordpress', 'info', 'Comments Enabled', 'Comment forms detected on page', 'enabled');
+      }
+    }
 
     return groups;
   }
